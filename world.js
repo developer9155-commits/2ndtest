@@ -563,7 +563,9 @@ export async function createWorld(opts) {
   });
 
   await stage(0.26, 'Blooming blossom trees and bushes', () => {
-    const parts = [paintGeo(new THREE.CylinderGeometry(0.06, 0.1, 0.7, 6).translate(0, 0.35, 0), '#8a5a44')];
+    // IcosahedronGeometry (used below for the blossom blobs) is always non-indexed in three.js,
+    // so the trunk must be made non-indexed too, or mergeGeometries() silently returns null.
+    const parts = [paintGeo(new THREE.CylinderGeometry(0.06, 0.1, 0.7, 6).toNonIndexed().translate(0, 0.35, 0), '#8a5a44')];
     [[0, 1.0, 0, 0.5], [0.3, 0.85, 0.12, 0.34], [-0.28, 0.9, -0.1, 0.36], [0.05, 1.32, 0.05, 0.34]].forEach(([x, y, z, r]) => {
       parts.push(paintGeo(new THREE.IcosahedronGeometry(r, 1).translate(x, y, z), '#ffffff'));
     });
