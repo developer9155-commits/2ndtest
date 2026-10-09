@@ -284,7 +284,8 @@ export async function createWorld(opts) {
 
   function canvasTextureWH(w, h, draw) {
     const c = document.createElement('canvas'); c.width = w; c.height = h;
-    draw(c.getContext('2d'), w, h);
+    const ctx = c.getContext('2d');
+    if (ctx) draw(ctx, w, h);           // some locked-down browsers hand back a null 2D context; skip drawing rather than crash
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
     return t;
@@ -1686,20 +1687,23 @@ export async function createWorld(opts) {
   const tmpV = new THREE.Vector3();
   const rayPick = new THREE.Raycaster(), rayOcc = new THREE.Raycaster(), ndc = new THREE.Vector2();
   function markerHidden(m) {                           // is the marker behind a hill?
+    if (!m || !m.g || !terrain) return false;
     tmpV.copy(m.g.position).sub(camera.position);
     const dist = tmpV.length();
+    if (dist < 1e-4) return false;
     rayOcc.set(camera.position, tmpV.normalize()); rayOcc.far = dist - 0.5;
     return rayOcc.intersectObject(terrain, false).length > 0;
   }
   function pick(clientX, clientY) {
     const r = canvas.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
     ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     rayPick.setFromCamera(ndc, camera);
     const hit = rayPick.intersectObjects(hitProxies, false)[0];
-    if (!hit) return null;
-    const ground = rayPick.intersectObject(terrain, false)[0];
+    if (!hit || !hit.object || !hit.object.userData) return null;
+    const ground = terrain ? rayPick.intersectObject(terrain, false)[0] : null;
     if (ground && ground.distance < hit.distance - 0.4) return null;   // a hill is in the way
-    return hit.object.userData.id;
+    return hit.object.userData.id || null;
   }
   always.push((dt, t) => {                             // markers float, pulse and swell when hovered
     const hot = pickId || domHoverId;
@@ -1877,8 +1881,14 @@ export async function createWorld(opts) {
 
   function update(dt) {
     stepFallbackTweens(dt);
-    if (animate) for (let i = 0; i < animators.length; i++) animators[i](dt, t);
-    for (let i = 0; i < always.length; i++) always[i](dt, t);
+    if (animate) {
+      for (let i = 0; i < animators.length; i++) {
+        try { animators[i](dt, t); } catch (err) { console.warn('An animator skipped a frame:', err); }
+      }
+    }
+    for (let i = 0; i < always.length; i++) {
+      try { always[i](dt, t); } catch (err) { console.warn('A state update skipped a frame:', err); }
+    }
 
     par.x += (par.tx - par.x) * Math.min(1, dt * 2.5); par.y += (par.ty - par.y) * Math.min(1, dt * 2.5);
     if (animate && cloudsFar) { cloudsFar.position.x = -par.x * 1.5; cloudsFar.position.y = -par.y * 0.8; }
@@ -1887,17 +1897,24 @@ export async function createWorld(opts) {
     if (!flight && (controls.enabled || controls.autoRotate) && controls.update()) dirty = true;
 
     if (mode === 'explore') {                          // keep the HTML labels glued to the 3D markers
-      if (markerList.length) {
-        const m = markerList[occIndex++ % markerList.length];
-        hiddenBy[m.id] = markerHidden(m);              // check one marker per frame to keep it cheap
+      try {
+        if (markerList.length) {
+          const m = markerList[occIndex++ % markerList.length];
+          if (m) hiddenBy[m.id] = markerHidden(m);      // check one marker per frame to keep it cheap
+        }
+        markerList.forEach((m, i) => {
+          if (!m || !m.g) return;
+          tmpV.copy(m.g.position).project(camera);
+          const s = screens[i];
+          if (!s) return;
+          s.x = (tmpV.x * 0.5 + 0.5) * size.w; s.y = (-tmpV.y * 0.5 + 0.5) * size.h;
+          s.visible = tmpV.z < 1 && Math.abs(tmpV.x) < 1.08 && Math.abs(tmpV.y) < 1.08 && !hiddenBy[m.id];
+        });
+        onFrame(screens);
+      } catch (err) {
+        // A glitch in the floating-label overlay should never take down the whole 3D view.
+        console.warn('Hotspot label update skipped a frame:', err);
       }
-      markerList.forEach((m, i) => {
-        tmpV.copy(m.g.position).project(camera);
-        const s = screens[i];
-        s.x = (tmpV.x * 0.5 + 0.5) * size.w; s.y = (-tmpV.y * 0.5 + 0.5) * size.h;
-        s.visible = tmpV.z < 1 && Math.abs(tmpV.x) < 1.08 && Math.abs(tmpV.y) < 1.08 && !hiddenBy[m.id];
-      });
-      onFrame(screens);
     }
 
     if (animate || dirty) { renderer.render(scene, camera); dirty = false; }
