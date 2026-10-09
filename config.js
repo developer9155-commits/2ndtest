@@ -10,7 +10,10 @@
                 and where the camera flies when it is clicked).
 
    Positions are written as [x, y, z]. x = right, y = up, z = toward you.
-   The island is about 14 units wide from its centre to its edge.
+   The island is now about 30 units from its centre to its edge. The village,
+   farm and hills are in the middle; the city and the Astropulse SMM office
+   are on the south side (large z values). world.js scales everything up
+   for you, so write positions in these plain units.
    ===================================================================== */
 
 export const CONFIG = {
@@ -20,21 +23,23 @@ export const CONFIG = {
      email          : just the address, e.g. 'you@example.com'  (no "mailto:")
      github/linkedin: full address starting with https://
      nexoraRepo     : paste your Nexora AI GitHub repository URL when ready
+     astropulseLive : the Astropulse SMM website or profile link
   ------------------------------------------------------------------- */
   links: {
-    email: '',
-    github: '',
+    email: 'murarikumarstm102@gmail.com',
+    github: 'https://github.com/developer8709-max',
     linkedin: '',
     nexoraLive: 'https://nexora-ai-webbuilder.vercel.app/',
     nexoraRepo: '',
     cropLive: '',
     cropRepo: '',
+    astropulseLive: 'https://astropulsesmm.vercel.app',
   },
 
   /* ---- Education panel --------------------------------------------- */
   text: {
-    college: '',     // e.g. 'Government Polytechnic, Your City'
-    graduation: '',  // e.g. '2027'
+    college: 'Centurion University ',     // e.g. 'Government Polytechnic, Your City'
+    graduation: '2027',  // e.g. '2027'
   },
 
   /* ---- Optional real 3D models --------------------------------------
@@ -50,10 +55,13 @@ export const CONFIG = {
     camperOffset: [0, 0, 0],
   },
 
-  /* ---- Camera views ------------------------------------------------- */
+  /* ---- Camera views -------------------------------------------------
+     The island is bigger now, so Home and Explore sit further back and
+     look a little toward the south, so part of the city is in the frame.
+  ------------------------------------------------------------------- */
   views: {
-    home:      { position: [17, 8.5, 25],   target: [0, 1.8, 0] },
-    explore:   { position: [13, 13.5, 22],  target: [0, 1.2, 0] },
+    home:      { position: [20, 9, 30],   target: [0, 2, 6] },
+    explore:   { position: [22, 26, 38],  target: [0, 1, 9] },
     // Education has no marker, so it is opened from the menu only.
     education: { position: [-4.4, 4.4, 5.4], target: [-9.4, 1.0, -1.2] },
   },
@@ -95,6 +103,16 @@ export const CONFIG = {
       color: '#e8b23a',
       position: [9.8, 3.4, 0.2],
       camera: { position: [16.5, 5.0, 7.0], target: [9.6, 0.9, 0.2] },
+    },
+    {
+      // The glass office in the city, south side of the island. The marker
+      // floats above its tower; the camera looks at the building from the front.
+      id: 'astropulse',
+      label: 'Astropulse SMM',
+      preview: 'A social media marketing office with a team of nine, in the city.',
+      color: '#ff4fa3',
+      position: [-6.0, 8.0, 16.3],
+      camera: { position: [-2.0, 6.0, 31.0], target: [-6.0, 2.5, 18.0] },
     },
     {
       id: 'contact',
