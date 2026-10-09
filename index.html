@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Murari Kumar — Student Developer &amp; AI Product Builder</title>
+  <meta name="description" content="Portfolio of Murari Kumar, a Diploma CSE student building web, Android and AI-powered products. Explore it as an interactive 3D world.">
+  <meta name="theme-color" content="#4f9bff">
+  <meta property="og:title" content="Murari Kumar — Student Developer &amp; AI Product Builder">
+  <meta property="og:description" content="An interactive 3D portfolio: explore a tiny floating world to see my skills and projects.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%234f9bff'/%3E%3Cpath d='M8 50 L26 22 L38 40 L46 30 L58 50Z' fill='%236c58cf'/%3E%3Ccircle cx='46' cy='16' r='6' fill='%23ffe08a'/%3E%3C/svg%3E">
+
+  <!-- Fonts are optional: if they fail to load, system fonts are used. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=DM+Sans:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="style.css">
+
+  <!-- Three.js is loaded through an import map (no npm / build step needed). Versions are pinned. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <!-- GSAP (camera transitions). If it fails to load, the site falls back to a built-in tween. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" defer></script>
+</head>
+
+<body data-view="home">
+  <script>
+    // Runs only when JavaScript is on. Without JS the page stays a normal, readable website.
+    document.body.classList.add('mode-3d', 'is-loading');
+  </script>
+
+  <!-- ============================ LOADING SCREEN ============================ -->
+  <div id="loader" class="loader" role="status" aria-live="polite">
+    <div class="loader-inner">
+      <p class="loader-name">Murari Kumar</p>
+      <p class="loader-sub" id="loader-status">Starting up</p>
+      <div class="loader-track" aria-hidden="true">
+        <div class="loader-fill" id="loader-fill"></div>
+        <svg class="loader-van" id="loader-van" viewBox="0 0 48 28" width="40" height="24" aria-hidden="true">
+          <rect x="2" y="6" width="32" height="14" rx="3" fill="#ff6b5e"/>
+          <rect x="30" y="11" width="14" height="9" rx="2" fill="#ff6b5e"/>
+          <rect x="2" y="12" width="42" height="3" fill="#fff1dc"/>
+          <rect x="8" y="8" width="8" height="4" fill="#cfe9ff"/><rect x="19" y="8" width="8" height="4" fill="#cfe9ff"/>
+          <circle cx="12" cy="21" r="4" fill="#2b2850"/><circle cx="36" cy="21" r="4" fill="#2b2850"/>
+        </svg>
+      </div>
+      <p class="loader-pct" id="loader-pct" aria-hidden="true">0%</p>
+
+      <div class="loader-error" id="loader-error" hidden>
+        <p id="loader-error-msg">Something went wrong.</p>
+        <div class="loader-actions">
+          <button type="button" class="btn btn-primary" id="btn-retry">Try again</button>
+          <button type="button" class="btn btn-ghost" id="btn-simple">Try a simpler scene</button>
+          <button type="button" class="btn btn-ghost" id="btn-static">Open the text version</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ 3D STAGE ============================ -->
+  <div class="stage" id="stage">
+    <canvas id="scene" aria-label="Interactive 3D miniature world. Drag to look around. Use the menu or the glowing markers to open portfolio sections." role="img"></canvas>
+  </div>
+
+  <!-- ============================ TOP BAR ============================ -->
+  <header class="topbar">
+    <button type="button" class="brand" id="brand-btn" aria-label="Murari Kumar, back to start">Murari Kumar</button>
+    <div class="topbar-actions">
+      <button type="button" class="chip-btn" id="btn-reset" aria-label="Reset camera view">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v4.5h4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="btn-label">Reset view</span>
+      </button>
+      <button type="button" class="chip-btn" id="btn-sound" aria-pressed="false" aria-label="Sound">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z" fill="currentColor"/>
+          <path class="wave" d="M15.5 9a4 4 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path class="mute" d="M15 9.5l5 5M20 9.5l-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span class="btn-label">Sound off</span>
+      </button>
+      <button type="button" class="chip-btn chip-btn-menu" id="btn-menu" aria-expanded="false" aria-controls="menu" aria-label="Menu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span class="btn-label">Menu</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ============================ MENU ============================ -->
+  <nav id="menu" class="menu" aria-label="Portfolio sections">
+    <ul>
+      <li><a href="#hero" data-go="home">Home</a></li>
+      <li><a href="#panel-about" data-go="about">About me</a></li>
+      <li><a href="#panel-skills" data-go="skills">Skills</a></li>
+      <li><a href="#panel-nexora" data-go="nexora">Nexora AI</a></li>
+      <li><a href="#panel-crop" data-go="crop">CropIndia AI</a></li>
+      <li><a href="#panel-education" data-go="education">Education</a></li>
+      <li><a href="#panel-contact" data-go="contact">Contact</a></li>
+    </ul>
+  </nav>
+
+  <p class="static-note" id="static-note" hidden></p>
+
+  <main>
+    <!-- ============================ HOME ============================ -->
+    <section id="hero" class="hero" aria-labelledby="hero-title">
+      <h1 id="hero-title" class="hero-title"><span class="reveal r1">Hi, I'm Murari Kumar.</span></h1>
+      <p class="hero-role reveal r2">Diploma CSE Student &amp; Developer</p>
+      <p class="hero-line reveal r3">I build digital experiences and AI-powered products.</p>
+      <p class="reveal r4"><button type="button" class="btn btn-primary btn-big" id="btn-explore">Explore my world</button></p>
+    </section>
+
+    <!-- 3D hotspot labels are created by main.js from config.js -->
+    <div id="hotspots" class="hotspots"></div>
+    <p id="hint" class="hint">Drag to look around, scroll or pinch to zoom, and tap a glowing marker to open it.</p>
+
+    <!-- ============================ PANELS ============================ -->
+    <div class="panels">
+
+      <!-- ABOUT -->
+      <article class="panel" id="panel-about" tabindex="-1" aria-labelledby="t-about">
+        <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
+        <h2 id="t-about">About me</h2>
+        <p class="lead">I'm a Diploma student in Computer Science and Engineering who likes turning ideas into working software.</p>
+        <p>I'm interested in software development, web technologies, Android applications and artificial intelligence. I learn best by building real things, so most of what I know comes from projects I've started, broken, fixed and shipped.</p>
+        <h3>What I'm focused on</h3>
+        <ul class="plain">
+          <li>Building responsive websites and web apps with HTML, CSS, JavaScript and React.</li>
+          <li>Creating Android applications with Java.</li>
+          <li>Adding AI features to products, like the website generator in Nexora AI.</li>
+        </ul>
+        <h3>What I'm looking for</h3>
+        <p>Chances to work with other developers, learn from real projects and build products that help people. If that sounds like your team or your idea, say hello in the contact section.</p>
+        <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
+      </article>
+
+      <!-- SKILLS -->
+      <article class="panel" id="panel-skills" tabindex="-1" aria-labelledby="t-skills">
+        <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
+        <h2 id="t-skills">Skills</h2>
+        <p class="lead">The languages, platforms and tools I use to build things.</p>
+        <div class="skill-group">
+          <h3>Languages</h3>
+          <ul class="chips" style="--c:#ff6b5e">
+            <li style="--i:0">HTML</li><li style="--i:1">CSS</li><li style="--i:2">JavaScript</li><li style="--i:3">Java</li><li style="--i:4">Python</li><li style="--i:5">C++</li>
+          </ul>
+        </div>
+        <div class="skill-group">
+          <h3>Frameworks and platforms</h3>
+          <ul class="chips" style="--c:#5ac8c8">
+            <li style="--i:6">React</li><li style="--i:7">Android development</li><li style="--i:8">Firebase</li>
+          </ul>
+        </div>
+        <div class="skill-group">
+          <h3>Data and APIs</h3>
+          <ul class="chips" style="--c:#8f7fe6">
+            <li style="--i:9">DBMS</li><li style="--i:10">REST APIs</li>
+          </ul>
+        </div>
+        <div class="skill-group">
+          <h3>Tools and workflow</h3>
+          <ul class="chips" style="--c:#e8b23a">
+            <li style="--i:11">Git</li><li style="--i:12">GitHub</li>
+          </ul>
+        </div>
+        <div class="skill-group">
+          <h3>Artificial intelligence</h3>
+          <ul class="chips" style="--c:#4fae7a">
+            <li style="--i:13">AI integration</li>
+          </ul>
+        </div>
+        <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
+      </article>
+
+      <!-- NEXORA AI -->
+      <article class="panel" id="panel-nexora" tabindex="-1" aria-labelledby="t-nexora">
+        <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
+        <p class="badge badge-live">Featured project</p>
+        <h2 id="t-nexora">Nexora AI</h2>
+        <p class="lead">An AI-powered website builder that helps people generate a website and publish it online.</p>
+        <h3>Overview</h3>
+        <p>Nexora AI is built for people who have an idea for a website but don't want to start from a blank page. They describe what they need, and the builder generates a site they can review and publish.</p>
+        <h3>AI website generation</h3>
+        <p>The AI turns a description into a working website, so the first draft takes minutes instead of days.</p>
+        <h3>Publishing and hosting</h3>
+        <p>Once a site is ready, Nexora AI helps the user publish it online, so the result can be shared with real visitors instead of staying on one computer.</p>
+        <h3>Technology stack</h3>
+        <ul class="chips chips-quiet">
+          <li>AI integration</li><li>HTML</li><li>CSS</li><li>JavaScript</li><li>Hosted on Vercel</li>
+        </ul>
+        <p class="note">Placeholder list. Edit the stack in index.html to match exactly what Nexora AI uses.</p>
+        <p class="panel-actions">
+          <a class="btn btn-primary" data-link="nexoraLive" href="https://nexora-ai-webbuilder.vercel.app/" target="_blank" rel="noopener noreferrer">Open live demo</a>
+          <a class="btn btn-ghost" data-link="nexoraRepo">View source code</a>
+        </p>
+        <p class="note" data-note-for="nexoraRepo">The source code link isn't set yet. Add the repository URL in config.js.</p>
+        <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
+      </article>
+
+      <!-- CROPINDIA AI -->
+      <article class="panel" id="panel-crop" tabindex="-1" aria-labelledby="t-crop">
+        <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
+        <p class="badge">Concept in development</p>
+        <h2 id="t-crop">CropIndia AI</h2>
+        <p class="lead">An agricultural intelligence application concept for crop production information and visualization.</p>
+        <h3>The idea</h3>
+        <p>India's crop data is spread across many sources and is hard to read at a glance. CropIndia AI is planned as one place where students, farmers and researchers can look up crop production information and see it as clear visuals.</p>
+        <h3>Planned capabilities</h3>
+        <ul class="plain">
+          <li>Look up crop production information.</li>
+          <li>Visualize that information with charts and maps.</li>
+          <li>Use AI to explain the data in plain language.</li>
+        </ul>
+        <p class="note">None of these features are live yet. This section describes the plan, not a finished product.</p>
+        <p class="panel-actions">
+          <a class="btn btn-primary" data-link="cropLive">Live demo</a>
+          <a class="btn btn-ghost" data-link="cropRepo">View source code</a>
+        </p>
+        <p class="note" data-note-for="cropLive">No demo yet. The link will appear here once the project is online.</p>
+        <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
+      </article>
+
+      <!-- EDUCATION -->
+      <article class="panel" id="panel-education" tabindex="-1" aria-labelledby="t-education">
+        <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
+        <h2 id="t-education">Education</h2>
+        <p class="lead">Diploma in Computer Science and Engineering.</p>
+        <dl class="facts">
+          <div><dt>Program</dt><dd>Diploma in Computer Science and Engineering (CSE)</dd></div>
+          <div><dt>College</dt><dd class="placeholder" data-text="college">Add your college name in config.js</dd></div>
+          <div><dt>Graduation</dt><dd class="placeholder" data-text="graduation">Add your graduation year in config.js</dd></div>
+        </dl>
+        <h3>Learning beyond class</h3>
+        <p>Alongside my coursework, I build personal projects in web development, Android and AI integration. That's where I practice what I learn.</p>
+        <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
+      </article>
+
+      <!-- CONTACT -->
+      <article class="panel" id="panel-contact" tabindex="-1" aria-labelledby="t-contact">
+        <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
+        <h2 id="t-contact">Contact</h2>
+        <p class="lead">Have a project, an internship or a question? I'd like to hear from you.</p>
+        <ul class="contact-list">
+          <li><a class="contact-row" data-link="email"><span class="row-name">Email</span><span class="row-value placeholder" data-link-text>Add your email in config.js</span></a></li>
+          <li><a class="contact-row" data-link="github"><span class="row-name">GitHub</span><span class="row-value placeholder" data-link-text>Add your GitHub link in config.js</span></a></li>
+          <li><a class="contact-row" data-link="linkedin"><span class="row-name">LinkedIn</span><span class="row-value placeholder" data-link-text>Add your LinkedIn link in config.js</span></a></li>
+        </ul>
+        <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
+      </article>
+    </div>
+  </main>
+
+  <!-- ============================ FOOTER ============================ -->
+  <footer class="footer">
+    <span>© <span data-year>2026</span> Murari Kumar</span>
+    <a data-link="github" data-hide-if-empty>GitHub</a>
+    <a data-link="linkedin" data-hide-if-empty>LinkedIn</a>
+    <a data-link="email" data-hide-if-empty>Email</a>
+    <a data-link="nexoraLive" href="https://nexora-ai-webbuilder.vercel.app/" target="_blank" rel="noopener noreferrer" data-hide-if-empty>Nexora AI</a>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- Safety net: if main.js never starts (file missing, blocked, syntax error), don't leave the loader stuck. -->
+  <script>
+    (function () {
+      setTimeout(function () {
+        if (window.__portfolioStarted) return;
+        var $ = function (id) { return document.getElementById(id); };
+        $('loader-status').textContent = 'Something went wrong';
+        $('loader-error-msg').textContent = 'The portfolio scripts did not load. Check your connection, or make sure every file was uploaded to the repository root.';
+        $('btn-simple').hidden = true;
+        $('loader-error').hidden = false;
+        $('btn-retry').onclick = function () { location.reload(); };
+        $('btn-static').onclick = function () {
+          document.body.classList.remove('mode-3d', 'is-loading');
+          $('loader').hidden = true;
+        };
+      }, 10000);
+    })();
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
