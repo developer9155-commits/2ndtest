@@ -5,22 +5,15 @@
      start(), playIntro(), flyTo(id), setHover(id), setViewShift(x, y, s),
      setAutoRotate(on), nudge(dx, dy, zoom), dispose()
 
-   What is new in this version
-     • The whole world is bigger (WORLD_SCALE below).
-     • People are rebuilt: faces, hair, hands, knees, shoes, clothes.
-       Two new villagers: a fisher at the pond and a student at the school.
-     • More beauty: blossom trees, bushes, lamp posts, birds, butterflies,
-       pond ripples, softer shadows.
-
    File map (search for these headings):
      0. helpers          small math / random / animation helpers
      1. renderer         the WebGL renderer, scene, camera, controls
      2. sky + lights     background gradient, sun, shadows
      3. terrain          island, purple hills, road
-     4. nature           pine + blossom trees, bushes, rocks, flowers, pond
+     4. nature           pine trees, rocks, flowers, pond
      5. landmarks        camp + camper van, beacon tower, farm, signpost, mailbox, school
-     6. people           me, hiker, farmer, cyclist, fisher, student
-     7. atmosphere       clouds, floating rocks, sparkles, birds, butterflies
+     6. people           me, hiker, farmer, cyclist
+     7. atmosphere       clouds, floating rocks, sparkles
      8. hotspots         glowing markers + click / hover detection
      9. camera           GSAP flights between places, limits, view shift
     10. loop             the animation loop and clean-up
@@ -29,12 +22,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-
-/* ------------------------------------------------------------------ */
-/* SIZE SETTINGS — change these to make the world bigger or smaller    */
-/* ------------------------------------------------------------------ */
-const WORLD_SCALE = 1.35;   // how much bigger the island and everything on it is (1 = old size)
-const CAMERA_SCALE = 1.2;   // how far back the home / explore camera sits (keep a bit below WORLD_SCALE)
 
 /* ------------------------------------------------------------------ */
 /* 0. helpers                                                          */
@@ -66,13 +53,6 @@ function vnoise(x, z) {                           // smooth 2D value noise, resu
   const u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
   const a = hash3(ix, 0.5, iz), b = hash3(ix + 1, 0.5, iz), c = hash3(ix, 0.5, iz + 1), d = hash3(ix + 1, 0.5, iz + 1);
   return lerp(lerp(a, b, u), lerp(c, d, u), v);
-}
-// Give every vertex of a geometry one colour (so several parts can be merged into one mesh).
-function paintGeo(g, hex) {
-  const c = new THREE.Color(hex), arr = new Float32Array(g.attributes.position.count * 3);
-  for (let i = 0; i < g.attributes.position.count; i++) c.toArray(arr, i * 3);
-  g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
-  return g;
 }
 
 /* ---- tiny animation layer -------------------------------------------
@@ -149,7 +129,6 @@ export async function createWorld(opts) {
     onFrame = () => {}, onUserInteract = () => {}, onWarning = () => {}, onError = () => {},
   } = opts;
 
-  const S = WORLD_SCALE;
   const simple = quality === 'simple';
   const small = window.matchMedia('(max-width: 760px)').matches;
   const animate = !reducedMotion;
@@ -172,33 +151,20 @@ export async function createWorld(opts) {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0xcfe6ff, 95, 250);
-
-  // Everything that belongs to the island lives inside W, which is scaled up.
-  const W = new THREE.Group();
-  W.scale.setScalar(S);
-  scene.add(W);
+  scene.fog = new THREE.Fog(0xcfe6ff, 75, 200);
 
   const camera = new THREE.PerspectiveCamera(38, 1, 0.5, 900);
   const size = { w: 1, h: 1 };
   let fovBoost = 0;                                   // extra field of view, used by the intro flight
   const baseFov = (aspect) => clamp(38 * Math.pow(Math.max(1, 1 / aspect), 0.9), 38, 68); // wider on tall phone screens
 
-  // Where the camera can go (from config.js, with safe defaults). Values here are in the
-  // old, un-scaled units; they are converted to the bigger world just below.
-  const rawViews = {
+  // Where the camera can go (from config.js, with safe defaults).
+  const views = {
     home: { position: [17, 8.5, 25], target: [0, 1.8, 0] },
     explore: { position: [13, 13.5, 22], target: [0, 1.2, 0] },
     ...(config.views || {}),
   };
-  (config.hotspots || []).forEach((h) => { if (h.camera) rawViews[h.id] = h.camera; });
-  const views = {};
-  Object.keys(rawViews).forEach((id) => {
-    const v = rawViews[id];
-    const wide = id === 'home' || id === 'explore';
-    const k = wide ? CAMERA_SCALE : S;                // close-up views scale with the world so framing stays the same
-    views[id] = { position: v.position.map((n) => n * k), target: v.target.map((n) => n * S) };
-  });
+  (config.hotspots || []).forEach((h) => { if (h.camera) views[h.id] = h.camera; });
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
@@ -212,10 +178,10 @@ export async function createWorld(opts) {
   // Camera limits keep the visitor from zooming inside the island or flying into space.
   function setLimits(m) {
     if (m === 'section') {                             // panels fly the camera close: relax the limits (controls are off here)
-      controls.minDistance = 0.5; controls.maxDistance = 400;
+      controls.minDistance = 0.5; controls.maxDistance = 300;
       controls.minPolarAngle = 0; controls.maxPolarAngle = Math.PI;
     } else {
-      controls.minDistance = 13 * CAMERA_SCALE; controls.maxDistance = 40 * S;
+      controls.minDistance = 13; controls.maxDistance = 40;
       controls.minPolarAngle = 0.3; controls.maxPolarAngle = 1.5;   // never below the island's horizon
     }
   }
@@ -312,36 +278,34 @@ export async function createWorld(opts) {
           #include <colorspace_fragment>
         }`,
     });
-    const sky = new THREE.Mesh(new THREE.SphereGeometry(520, 24, 16), skyMat);
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(420, 24, 16), skyMat);
     sky.renderOrder = -10; sky.frustumCulled = false; scene.add(sky);
 
-    scene.add(new THREE.HemisphereLight(0xcfe6ff, 0xa58bd6, 1.25));    // sky colour from above, purple bounce from below
+    scene.add(new THREE.HemisphereLight(0xcfe6ff, 0xa58bd6, 1.2));      // sky colour from above, purple bounce from below
 
-    sunLight = new THREE.DirectionalLight(0xfff0d0, 2.4);
-    sunLight.position.set(14, 22, 11);
+    sunLight = new THREE.DirectionalLight(0xfff0d0, 2.3);
+    sunLight.position.set(10, 16, 8);
     if (!simple) {
       sunLight.castShadow = true;
-      const ms = small ? 1536 : 3072;
+      const ms = small ? 1024 : 2048;
       sunLight.shadow.mapSize.set(ms, ms);
       const c = sunLight.shadow.camera;
-      const e = 18 * S + 2;
-      c.left = -e; c.right = e; c.top = e; c.bottom = -e; c.near = 1; c.far = 100;
-      sunLight.shadow.bias = -0.0004; sunLight.shadow.normalBias = 0.05;
-      sunLight.shadow.radius = 2.5;
+      c.left = -18; c.right = 18; c.top = 18; c.bottom = -18; c.near = 1; c.far = 60;
+      sunLight.shadow.bias = -0.0005; sunLight.shadow.normalBias = 0.04;
     }
     scene.add(sunLight);
 
-    const fill = new THREE.DirectionalLight(0x9f8cff, 0.6);           // cool purple fill from the opposite side
+    const fill = new THREE.DirectionalLight(0x9f8cff, 0.55);           // cool purple fill from the opposite side
     fill.position.set(-8, 6, -10); scene.add(fill);
 
-    const sunDir = new THREE.Vector3(10, 16, 8).normalize().multiplyScalar(480);
-    glow(scene, 0xfff2c8, 110, 0.7, sunDir.x, sunDir.y, sunDir.z);
+    const sunDir = new THREE.Vector3(10, 16, 8).normalize().multiplyScalar(380);
+    glow(scene, 0xfff2c8, 90, 0.7, sunDir.x, sunDir.y, sunDir.z);
   });
 
   /* ---------------------------------------------------------------- */
   /* 3. terrain: island, hills, road                                   */
   /* ---------------------------------------------------------------- */
-  const R = 14;                                       // island radius (before WORLD_SCALE)
+  const R = 14;                                       // island radius
   // Hills: [x, z, height, radius]. Edit these to move the mountains.
   const BUMPS = [[-8, -8.5, 6.0, 6.5], [-1.5, -10, 8.6, 7.5], [6, -8.8, 6.5, 6.5], [11.5, -5.5, 4.5, 5.5], [-12.5, -5.5, 4.2, 5.2]];
   // Flat building areas: [x, z, radius, height]. Everything that sits on the ground has one.
@@ -395,7 +359,7 @@ export async function createWorld(opts) {
 
   let terrain;
   await stage(0.12, 'Raising the island', () => {
-    const RINGS = simple ? 18 : 30, SEG = simple ? 44 : 72;
+    const RINGS = simple ? 16 : 24, SEG = simple ? 40 : 60;
     const grid = [];
     for (let i = 0; i <= RINGS; i++) {
       const row = [], r = (R * i) / RINGS;
@@ -431,15 +395,11 @@ export async function createWorld(opts) {
     g.computeVertexNormals();                          // not indexed, so every triangle gets its own flat normal
     terrain = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
     terrain.castShadow = true; terrain.receiveShadow = true;
-    W.add(terrain);
+    scene.add(terrain);
 
     // Soil band and the jagged purple rock underneath.
     const soil = new THREE.Mesh(new THREE.CylinderGeometry(R, R * 0.94, 1.3, SEG, 1, true), mat('#b9825f'));
-    soil.position.y = -0.65; soil.receiveShadow = true; W.add(soil);
-
-    // a thin grassy lip so the island edge looks finished
-    const lip = new THREE.Mesh(new THREE.TorusGeometry(R - 0.02, 0.08, 6, SEG), mat('#6fd08a'));
-    lip.rotation.x = Math.PI / 2; lip.position.y = 0.01; W.add(lip);
+    soil.position.y = -0.65; soil.receiveShadow = true; scene.add(soil);
 
     const rockGeo = new THREE.ConeGeometry(R * 0.94, 11, simple ? 18 : 28, 5, true);
     const rp = rockGeo.attributes.position, top = 5.5;
@@ -449,7 +409,7 @@ export async function createWorld(opts) {
       rp.setXYZ(i, x + (hash3(x, y, z) - 0.5) * amp * 1.6, y + (hash3(x, y + 1, z) - 0.5) * amp, z + (hash3(x, y, z + 1) - 0.5) * amp * 1.6);
     }
     const rock = new THREE.Mesh(rockGeo, mat('#5a4aa8'));
-    rock.rotation.x = Math.PI; rock.position.y = -1.3 - 5.5; rock.castShadow = true; W.add(rock);
+    rock.rotation.x = Math.PI; rock.position.y = -1.3 - 5.5; rock.castShadow = true; scene.add(rock);
   });
 
   await stage(0.24, 'Paving the road', () => {
@@ -472,7 +432,7 @@ export async function createWorld(opts) {
       g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
       g.computeVertexNormals();
       const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset }));
-      m.receiveShadow = true; W.add(m);
+      m.receiveShadow = true; scene.add(m);
     }
     ribbon(-0.78, 0.78, 0.05, '#3f3d66', -1);
     ribbon(-0.93, -0.78, 0.06, '#f5e6c8', -2);
@@ -486,26 +446,31 @@ export async function createWorld(opts) {
       if (Math.hypot(p.x, p.z) > 13.2) { d.scale.set(0, 0, 0); } else { d.scale.set(0.42, 0.012, 0.07); }
       d.position.set(p.x, 0.07, p.z); d.rotation.set(0, -Math.atan2(t.z, t.x), 0); d.updateMatrix(); im.setMatrixAt(i, d.matrix);
     }
-    W.add(im);
+    scene.add(im);
   });
 
   /* ---------------------------------------------------------------- */
-  /* 4. nature: trees, bushes, rocks, flowers, pond                    */
+  /* 4. nature: trees, rocks, flowers, pond                            */
   /* ---------------------------------------------------------------- */
   const rng = mulberry32(20260);
   let trees = null;
   const treeData = [];
 
-  await stage(0.34, 'Planting pine trees', () => {
+  await stage(0.36, 'Planting pine trees', () => {
+    const paint = (g, hex) => {                       // give every vertex of a part the same colour
+      const c = new THREE.Color(hex), arr = new Float32Array(g.attributes.position.count * 3);
+      for (let i = 0; i < g.attributes.position.count; i++) c.toArray(arr, i * 3);
+      g.setAttribute('color', new THREE.BufferAttribute(arr, 3)); return g;
+    };
     const parts = [];
-    parts.push(paintGeo(new THREE.CylinderGeometry(0.07, 0.1, 0.5, 5).translate(0, 0.25, 0), '#8a5a44'));
-    parts.push(paintGeo(new THREE.ConeGeometry(0.5, 0.8, 7).translate(0, 0.75, 0), '#2f9e78'));
-    parts.push(paintGeo(new THREE.ConeGeometry(0.39, 0.7, 7).translate(0, 1.2, 0), '#38ae84'));
-    parts.push(paintGeo(new THREE.ConeGeometry(0.26, 0.6, 7).translate(0, 1.6, 0), '#46c28f'));
+    parts.push(paint(new THREE.CylinderGeometry(0.07, 0.1, 0.5, 5).translate(0, 0.25, 0), '#8a5a44'));
+    parts.push(paint(new THREE.ConeGeometry(0.5, 0.8, 7).translate(0, 0.75, 0), '#2f9e78'));
+    parts.push(paint(new THREE.ConeGeometry(0.39, 0.7, 7).translate(0, 1.2, 0), '#38ae84'));
+    parts.push(paint(new THREE.ConeGeometry(0.26, 0.6, 7).translate(0, 1.6, 0), '#46c28f'));
     const treeGeo = mergeGeometries(parts);
 
-    const target = simple ? 55 : small ? 95 : 150;
-    for (let tries = 0; tries < 3000 && treeData.length < target; tries++) {
+    const target = simple ? 50 : small ? 85 : 125;
+    for (let tries = 0; tries < 2500 && treeData.length < target; tries++) {
       const rr = Math.sqrt(rng()) * 12.4, a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a);
       if (vnoise(x * 0.28 + 3, z * 0.28) < 0.38 && rng() < 0.85) continue;          // trees grow in clusters
       const h = terrainH(x, z);
@@ -517,7 +482,7 @@ export async function createWorld(opts) {
     const tints = ['#ffffff', '#f0ecff', '#e3fff1', '#ffffff'].map((c) => new THREE.Color(c));
     treeData.forEach((t, i) => trees.setColorAt(i, tints[i % tints.length]));
     trees.castShadow = true; trees.receiveShadow = true; trees.frustumCulled = false;
-    W.add(trees);
+    scene.add(trees);
 
     const dummy = new THREE.Object3D();
     let swayFrame = 0;
@@ -534,50 +499,9 @@ export async function createWorld(opts) {
     });
   });
 
-  await stage(0.4, 'Blooming blossom trees and bushes', () => {
-    // Round blossom trees: a trunk with a cluster of coloured leaf blobs.
-    const parts = [paintGeo(new THREE.CylinderGeometry(0.06, 0.1, 0.7, 6).translate(0, 0.35, 0), '#8a5a44')];
-    [[0, 1.0, 0, 0.5], [0.3, 0.85, 0.12, 0.34], [-0.28, 0.9, -0.1, 0.36], [0.05, 1.32, 0.05, 0.34]].forEach(([x, y, z, r]) => {
-      parts.push(paintGeo(new THREE.IcosahedronGeometry(r, 1).translate(x, y, z), '#ffffff'));
-    });
-    const bGeo = mergeGeometries(parts);
-    // The trunk keeps its brown; the canopy is tinted per tree through instance colours (white = pink below).
-    const blossoms = [];
-    const want = simple ? 6 : 18;
-    for (let tries = 0; tries < 1500 && blossoms.length < want; tries++) {
-      const rr = Math.sqrt(rng()) * 12, a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
-      if (h > 1.2 || !isClear(x, z, 1.3)) continue;
-      if (treeData.some((t) => (t.x - x) ** 2 + (t.z - z) ** 2 < 2.2)) continue;
-      if (blossoms.some((t) => (t.x - x) ** 2 + (t.z - z) ** 2 < 4)) continue;
-      blossoms.push({ x, y: h - 0.03, z, s: 0.95 + rng() * 0.6, ry: rng() * TAU });
-    }
-    const bMesh = new THREE.InstancedMesh(bGeo, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }), blossoms.length);
-    const bc = ['#ffb3c7', '#ffc9a8', '#ffd98a', '#ffa0bd', '#f6b8ff'].map((c) => new THREE.Color(c)), d = new THREE.Object3D();
-    blossoms.forEach((t, i) => {
-      d.position.set(t.x, t.y, t.z); d.rotation.set(0, t.ry, 0); d.scale.setScalar(t.s); d.updateMatrix();
-      bMesh.setMatrixAt(i, d.matrix); bMesh.setColorAt(i, bc[i % bc.length]);
-    });
-    bMesh.castShadow = true; bMesh.receiveShadow = true; bMesh.frustumCulled = false; W.add(bMesh);
-
-    // Bushes
-    const bushes = [];
-    for (let tries = 0; tries < 1200 && bushes.length < (simple ? 18 : 55); tries++) {
-      const rr = Math.sqrt(rng()) * 12.6, a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
-      if (h > 2.6 || !isClear(x, z, 0.5)) continue;
-      bushes.push({ x, y: h, z, s: 0.5 + rng() * 0.6 });
-    }
-    const bushMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.4, 1), new THREE.MeshLambertMaterial({ flatShading: true }), bushes.length);
-    const gc = ['#3fae7a', '#55c28a', '#2f9e78', '#6fd08a'].map((c) => new THREE.Color(c));
-    bushes.forEach((b, i) => {
-      d.position.set(b.x, b.y + b.s * 0.16, b.z); d.rotation.set(0, i, 0); d.scale.set(b.s * 1.3, b.s, b.s * 1.1); d.updateMatrix();
-      bushMesh.setMatrixAt(i, d.matrix); bushMesh.setColorAt(i, gc[i % gc.length]);
-    });
-    bushMesh.castShadow = true; bushMesh.receiveShadow = true; W.add(bushMesh);
-  });
-
-  await stage(0.47, 'Scattering rocks and flowers', () => {
+  await stage(0.46, 'Scattering rocks and flowers', () => {
     const rocks = [];
-    for (let tries = 0; tries < 800 && rocks.length < (simple ? 12 : 30); tries++) {
+    for (let tries = 0; tries < 800 && rocks.length < (simple ? 12 : 28); tries++) {
       const rr = Math.sqrt(rng()) * 12.6, a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
       if (h > 6.5 || !isClear(x, z, 0.7)) continue;
       rocks.push({ x, y: h, z, s: 0.25 + rng() * 0.45, ry: rng() * TAU });
@@ -588,153 +512,47 @@ export async function createWorld(opts) {
       d.position.set(r.x, r.y + r.s * 0.15, r.z); d.rotation.set(rng(), r.ry, rng()); d.scale.set(r.s * 1.3, r.s, r.s * 1.1); d.updateMatrix();
       rockMesh.setMatrixAt(i, d.matrix); rockMesh.setColorAt(i, rc[i % 3]);
     });
-    rockMesh.castShadow = true; rockMesh.receiveShadow = true; W.add(rockMesh);
+    rockMesh.castShadow = true; rockMesh.receiveShadow = true; scene.add(rockMesh);
 
-    // Flowers: a tiny green stem plus a coloured head, in many colours.
     const flowers = [];
-    for (let tries = 0; tries < 1200 && flowers.length < (simple ? 40 : 130); tries++) {
+    for (let tries = 0; tries < 600 && flowers.length < (simple ? 25 : 70); tries++) {
       const rr = Math.sqrt(rng()) * 12.4, a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
-      if (h > 0.6 || !isClear(x, z, 0.3)) continue;
-      flowers.push({ x, y: h, z, s: 0.8 + rng() * 0.6 });
+      if (h > 0.5 || !isClear(x, z, 0.3)) continue;
+      flowers.push({ x, y: h + 0.06, z });
     }
-    const fm = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.075, 0), new THREE.MeshLambertMaterial({ flatShading: true }), flowers.length);
-    const stems = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.01, 0.012, 0.18, 4), new THREE.MeshLambertMaterial({ color: '#3f9e6a' }), flowers.length);
-    const fc = ['#ff6b5e', '#ffe08a', '#ffffff', '#ff9fb8', '#c9a7ff', '#7ee8ff'].map((c) => new THREE.Color(c));
-    flowers.forEach((f, i) => {
-      d.position.set(f.x, f.y + 0.09 * f.s, f.z); d.rotation.set(0, 0, 0); d.scale.setScalar(f.s); d.updateMatrix(); stems.setMatrixAt(i, d.matrix);
-      d.position.set(f.x, f.y + 0.2 * f.s, f.z); d.updateMatrix(); fm.setMatrixAt(i, d.matrix); fm.setColorAt(i, fc[i % fc.length]);
-    });
-    W.add(stems); W.add(fm);
+    const fm = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.08, 0), new THREE.MeshLambertMaterial({ flatShading: true }), flowers.length);
+    const fc = ['#ff6b5e', '#ffe08a', '#ffffff', '#ff9fb8'].map((c) => new THREE.Color(c));
+    flowers.forEach((f, i) => { d.position.set(f.x, f.y, f.z); d.rotation.set(0, 0, 0); d.scale.setScalar(1); d.updateMatrix(); fm.setMatrixAt(i, d.matrix); fm.setColorAt(i, fc[i % fc.length]); });
+    scene.add(fm);
 
     // Pond
-    const pond = new THREE.Group(); pond.position.set(-5.6, 0, 0.3); W.add(pond);
-    const bank = cyl(pond, 2.1, 2.2, 0.06, 20, 0, -0.11, 0, '#c9b28a'); bank.castShadow = false;          // sandy rim
-    const water = cyl(pond, 1.9, 1.9, 0.04, 20, 0, -0.07, 0, '#5fd0e8', { emissive: '#1f7f9a', emissiveIntensity: 0.35 });
+    const pond = new THREE.Group(); pond.position.set(-5.6, 0, 0.3); scene.add(pond);
+    const water = cyl(pond, 1.9, 1.9, 0.04, 18, 0, -0.07, 0, '#5fd0e8', { emissive: '#1f7f9a', emissiveIntensity: 0.35 });
     water.castShadow = false;
     for (let i = 0; i < 9; i++) {                      // reeds and lily pads around the edge
       const a = rng() * TAU, r = 1.85 + rng() * 0.3;
       if (i < 5) cone(pond, 0.05, 0.6 + rng() * 0.3, 4, Math.cos(a) * r, 0.2, Math.sin(a) * r, '#3f9e6a');
-      else {
-        const lp = cyl(pond, 0.22, 0.22, 0.02, 8, Math.cos(a) * (r - 0.9), -0.04, Math.sin(a) * (r - 0.9), '#4fae7a'); lp.castShadow = false;
-        ball(pond, 0.05, Math.cos(a) * (r - 0.9), -0.01, Math.sin(a) * (r - 0.9), '#ffb3c7').castShadow = false;   // lotus bud
-      }
+      else { const lp = cyl(pond, 0.22, 0.22, 0.02, 8, Math.cos(a) * (r - 0.9), -0.04, Math.sin(a) * (r - 0.9), '#4fae7a'); lp.castShadow = false; }
     }
-    // rippling water rings
-    const ripples = [0, 1, 2].map((i) => {
-      const m = new THREE.Mesh(new THREE.RingGeometry(0.9, 0.96, 28), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
-      m.rotation.x = -Math.PI / 2; m.position.set(0.6, -0.04, -0.2); pond.add(m); return { m, off: i / 3 };
-    });
-    animators.push((dt, t) => {
-      water.material.emissiveIntensity = 0.3 + Math.sin(t * 1.4) * 0.08;
-      ripples.forEach((r) => { const k = (t * 0.28 + r.off) % 1; r.m.scale.setScalar(0.15 + k * 0.95); r.m.material.opacity = (1 - k) * 0.5; });
-    });
   });
 
   /* ---------------------------------------------------------------- */
   /* people (built first so the landmarks can place them)              */
-  /* ----------------------------------------------------------------
-     makePerson() builds a small, friendly, realistic-proportion person
-     that faces +x. Options:
-       skin, shirt, pants, hair, shoes, hairStyle ('short' | 'long' | 'pony' | 'none'),
-       hat ('straw' | 'beanie'), hatColor, backpack (colour), shorts (true/false)
-     It returns the group plus the moving parts:
-       upper (torso+head), head, armL, armR, elbowL, elbowR, legL, legR, shinL, shinR  */
-  function makePerson(o = {}) {
-    const skin = o.skin || '#f2c7a5', shirt = o.shirt || '#ff6b5e', pants = o.pants || '#2b2850';
-    const hairC = o.hair || '#241f4d', shoeC = o.shoes || '#fff8ec', HIP = 0.4;
-    const soft = (c, x) => mat(c, { flatShading: false, ...x });
-    const sphere = (p, r, x, y, z, color, shadow = true) => put(p, geo(`sball${r}`, () => new THREE.SphereGeometry(r, 16, 12)), soft(color), x, y, z, shadow);
-    const smallPart = (p, g, m, x = 0, y = 0, z = 0) => { const me = new THREE.Mesh(g, m); me.position.set(x, y, z); parent_add(p, me); return me; };
-    const parent_add = (p, me) => { me.castShadow = false; me.receiveShadow = false; p.add(me); };
-
+  /* ---------------------------------------------------------------- */
+  function makePerson(o) {
     const g = new THREE.Group();
-    const upper = new THREE.Group(); upper.position.y = HIP; g.add(upper);
-
-    /* --- torso: tapered body, shoulders, belt, neck --- */
-    const torso = cyl(upper, 0.12, 0.105, 0.38, 14, 0, 0.19, 0, shirt, { flatShading: false }); torso.scale.set(0.8, 1, 1.3);
-    const sh = put(upper, geo('shoulder', () => new THREE.SphereGeometry(0.1, 14, 10)), soft(shirt), 0, 0.345, 0); sh.scale.set(0.82, 0.55, 1.75);
-    const belt = cyl(upper, 0.108, 0.108, 0.045, 14, 0, 0.03, 0, o.belt || '#3a2f5b', { flatShading: false }); belt.scale.set(0.8, 1, 1.3); belt.castShadow = false;
-    box(upper, 0.03, 0.04, 0.05, 0.088, 0.03, 0, '#e8b23a').castShadow = false;       // belt buckle
-    cyl(upper, 0.042, 0.048, 0.08, 10, 0, 0.41, 0, skin, { flatShading: false });      // neck
-
-    /* --- head --- */
-    const head = new THREE.Group(); head.position.set(0.01, 0.56, 0); upper.add(head);
-    const skull = sphere(head, 0.135, 0, 0, 0, skin); skull.scale.set(0.95, 1.08, 0.92);
-    sphere(head, 0.03, 0, -0.01, 0.126, skin, false).scale.set(0.5, 1, 0.8);            // ears
-    sphere(head, 0.03, 0, -0.01, -0.126, skin, false).scale.set(0.5, 1, 0.8);
-    [0.05, -0.05].forEach((z) => {
-      const white = smallPart(head, geo('eyeW', () => new THREE.SphereGeometry(0.026, 12, 8)), soft('#ffffff'), 0.109, 0.014, z); white.scale.set(0.7, 1, 0.95);
-      smallPart(head, geo('eyeP', () => new THREE.SphereGeometry(0.0145, 10, 8)), soft('#241f4d'), 0.124, 0.012, z);
-      smallPart(head, geo('eyeS', () => new THREE.SphereGeometry(0.005, 6, 5)), soft('#ffffff'), 0.134, 0.02, z + 0.004);   // eye sparkle
-      const brow = smallPart(head, geo('brow', () => new THREE.BoxGeometry(0.012, 0.011, 0.05)), soft(hairC), 0.108, 0.058, z); brow.rotation.x = z > 0 ? 0.12 : -0.12;
-      smallPart(head, geo('cheek', () => new THREE.SphereGeometry(0.02, 8, 6)), soft('#f7a090'), 0.1, -0.03, z * 1.55).scale.set(0.5, 0.7, 1);
-    });
-    const nose = smallPart(head, geo('nose', () => new THREE.SphereGeometry(0.02, 10, 8)), soft(skin), 0.126, -0.012, 0); nose.scale.set(0.9, 1.1, 0.85);
-    const smileHolder = new THREE.Group(); smileHolder.position.set(0.115, -0.047, 0); smileHolder.rotation.y = Math.PI / 2; head.add(smileHolder);
-    const smile = smallPart(smileHolder, geo('smile', () => new THREE.TorusGeometry(0.028, 0.0065, 6, 12, Math.PI)), soft('#a8453f'));
-    smile.rotation.z = Math.PI;
-
-    /* --- hair --- */
-    const hairMat = soft(hairC);
-    const style = o.hairStyle || 'short';
-    if (style !== 'none' && o.hat !== 'beanie') {
-      const cap = put(head, geo('haircap', () => new THREE.SphereGeometry(0.149, 18, 10, 0, TAU, 0, Math.PI * 0.56)), hairMat, -0.006, 0.01, 0, false);
-      cap.scale.set(1.0, 1.07, 0.98); cap.rotation.z = 0.32; cap.castShadow = true;
-      const fringe = smallPart(head, geo('fringe', () => new THREE.BoxGeometry(0.05, 0.035, 0.2)), hairMat, 0.097, 0.092, 0); fringe.rotation.z = -0.5;
-      smallPart(head, geo('sidehair', () => new THREE.BoxGeometry(0.05, 0.08, 0.02)), hairMat, 0.02, 0.01, 0.12);
-      smallPart(head, geo('sidehair', () => new THREE.BoxGeometry(0.05, 0.08, 0.02)), hairMat, 0.02, 0.01, -0.12);
-      if (style === 'long' || style === 'pony') {
-        const back = smallPart(head, geo('hairback', () => new THREE.SphereGeometry(0.14, 14, 10)), hairMat, -0.05, -0.06, 0); back.scale.set(0.72, 1.25, 1.0); back.castShadow = true;
-      }
-      if (style === 'pony') {
-        const tail = smallPart(head, geo('pony', () => new THREE.CylinderGeometry(0.035, 0.012, 0.26, 8)), hairMat, -0.18, -0.07, 0); tail.rotation.z = 0.5; tail.castShadow = true;
-        smallPart(head, geo('tie', () => new THREE.SphereGeometry(0.028, 8, 6)), soft('#ff6b5e'), -0.14, 0.04, 0);
-      }
-    }
-    if (o.hat === 'straw') {
-      const brim = cyl(head, 0.27, 0.27, 0.025, 20, 0, 0.1, 0, '#e8c36a', { flatShading: false });
-      const crown = cyl(head, 0.115, 0.135, 0.11, 16, 0, 0.16, 0, '#e8c36a', { flatShading: false });
-      cyl(head, 0.138, 0.138, 0.03, 16, 0, 0.125, 0, o.hatColor || '#e8564a', { flatShading: false }).castShadow = false;   // hat band
-      brim.rotation.z = 0.05; crown.castShadow = true;
-    }
-    if (o.hat === 'beanie') {
-      const dome = put(head, geo('beanie', () => new THREE.SphereGeometry(0.152, 16, 10, 0, TAU, 0, Math.PI * 0.55)), soft(o.hatColor || '#ff6b5e'), -0.005, 0.015, 0, true);
-      dome.scale.set(1, 1.05, 1); dome.rotation.z = 0.15;
-      cyl(head, 0.152, 0.152, 0.05, 16, 0, 0.045, 0, '#fff1dc', { flatShading: false });
-      sphere(head, 0.045, -0.01, 0.17, 0, '#fff1dc');
-    }
-
-    /* --- arms: shoulder, sleeve, elbow, forearm, hand --- */
-    function makeArm(zSide) {
-      const arm = new THREE.Group(); arm.position.set(0, 0.34, zSide * 0.19); upper.add(arm);
-      sphere(arm, 0.052, 0, 0, 0, shirt);
-      cyl(arm, 0.047, 0.04, 0.2, 10, 0, -0.1, 0, shirt, { flatShading: false });
-      const elbow = new THREE.Group(); elbow.position.y = -0.2; elbow.rotation.z = 0.12; arm.add(elbow);
-      cyl(elbow, 0.036, 0.029, 0.17, 10, 0, -0.085, 0, o.longSleeve ? shirt : skin, { flatShading: false });
-      sphere(elbow, 0.035, 0, -0.185, 0, skin);                                          // hand
-      return { arm, elbow };
-    }
-    const aL = makeArm(1), aR = makeArm(-1);
-
-    /* --- legs: thigh, knee, shin, shoe --- */
-    function makeLeg(zSide) {
-      const leg = new THREE.Group(); leg.position.set(0, HIP, zSide * 0.075); g.add(leg);
-      cyl(leg, 0.062, 0.049, 0.2, 10, 0, -0.1, 0, pants, { flatShading: false });
-      const shin = new THREE.Group(); shin.position.y = -0.2; leg.add(shin);
-      cyl(shin, 0.049, 0.037, 0.19, 10, 0, -0.095, 0, o.shorts ? skin : pants, { flatShading: false });
-      sphere(shin, 0.05, 0, 0, 0, o.shorts ? skin : pants, false);                      // knee
-      const shoe = box(shin, 0.17, 0.065, 0.09, 0.035, -0.172, 0, shoeC);
-      box(shin, 0.175, 0.02, 0.095, 0.035, -0.2, 0, '#2b2850').castShadow = false;       // sole
-      return { leg, shin };
-    }
-    const lL = makeLeg(1), lR = makeLeg(-1);
-
-    if (o.backpack) {
-      box(upper, 0.13, 0.28, 0.22, -0.17, 0.2, 0, o.backpack);
-      box(upper, 0.11, 0.1, 0.19, -0.2, 0.32, 0, o.backpack);
-      [0.1, -0.1].forEach((z) => box(upper, 0.02, 0.26, 0.035, 0.1, 0.2, z, '#2b2850').castShadow = false);   // straps
-    }
-    return { group: g, upper, head, armL: aL.arm, armR: aR.arm, elbowL: aL.elbow, elbowR: aR.elbow, legL: lL.leg, legR: lR.leg, shinL: lL.shin, shinR: lR.shin };
+    const upper = new THREE.Group(); upper.position.y = 0.36; g.add(upper);
+    box(upper, 0.18, 0.34, 0.28, 0, 0.17, 0, o.shirt);
+    ball(upper, 0.15, 0, 0.5, 0, o.skin || '#f2c7a5');
+    put(upper, geo('hair', () => new THREE.SphereGeometry(0.165, 10, 6, 0, TAU, 0, Math.PI * 0.55)), mat(o.hair || '#2b2850'), 0, 0.52, 0);
+    box(upper, 0.03, 0.035, 0.035, 0.145, 0.52, 0.055, '#241f4d'); box(upper, 0.03, 0.035, 0.035, 0.145, 0.52, -0.055, '#241f4d');
+    const armL = new THREE.Group(); armL.position.set(0, 0.31, 0.18); upper.add(armL); box(armL, 0.075, 0.28, 0.075, 0, -0.12, 0, o.shirt);
+    const armR = new THREE.Group(); armR.position.set(0, 0.31, -0.18); upper.add(armR); box(armR, 0.075, 0.28, 0.075, 0, -0.12, 0, o.shirt);
+    const legL = new THREE.Group(); legL.position.set(0, 0.36, 0.07); g.add(legL); box(legL, 0.1, 0.34, 0.1, 0, -0.17, 0, o.pants || '#2b2850');
+    const legR = new THREE.Group(); legR.position.set(0, 0.36, -0.07); g.add(legR); box(legR, 0.1, 0.34, 0.1, 0, -0.17, 0, o.pants || '#2b2850');
+    if (o.hat === 'straw') { cyl(upper, 0.26, 0.26, 0.03, 12, 0, 0.62, 0, '#e8c36a'); cyl(upper, 0.13, 0.15, 0.1, 10, 0, 0.67, 0, '#e8c36a'); }
+    if (o.backpack) box(upper, 0.12, 0.26, 0.2, -0.15, 0.18, 0, o.backpack);
+    return { group: g, upper, armL, armR, legL, legR };
   }
   const faceDir = (obj, dx, dz) => { obj.rotation.y = -Math.atan2(dz, dx); };   // models face +x
 
@@ -745,7 +563,7 @@ export async function createWorld(opts) {
 
   await stage(0.56, 'Parking the camper van', () => {
     // --- camp: van, tent, fire, me ---
-    van.group.position.set(-6.2, 0, 6.8); van.group.rotation.y = -0.25; W.add(van.group);
+    van.group.position.set(-6.2, 0, 6.8); van.group.rotation.y = -0.25; scene.add(van.group);
     const g = van.body; van.group.add(g);
     const CORAL = '#ff6b5e', CREAM = '#fff1dc', GLASS = '#bfe4ff', DARK = '#2b2850';
     box(g, 2.3, 0.12, 0.95, 0, 0.34, 0, DARK);                           // chassis
@@ -774,13 +592,13 @@ export async function createWorld(opts) {
     });
 
     // tent
-    const tent = new THREE.Group(); tent.position.set(-8.8, 0, 8.0); tent.rotation.y = 0.5; W.add(tent);
+    const tent = new THREE.Group(); tent.position.set(-8.8, 0, 8.0); tent.rotation.y = 0.5; scene.add(tent);
     const tc = cone(tent, 1.05, 1.15, 4, 0, 0.58, 0, '#5ac8c8'); tc.rotation.y = Math.PI / 4;
     box(tent, 0.01, 0.6, 0.45, 0.72, 0.32, 0, '#2b2850').rotation.y = 0;
     box(tent, 0.2, 0.2, 0.2, -1.4, 0.1, 0.6, '#e8b23a');
 
     // campfire
-    const fire = new THREE.Group(); fire.position.set(-3.6, 0, 8.0); W.add(fire);
+    const fire = new THREE.Group(); fire.position.set(-3.6, 0, 8.0); scene.add(fire);
     for (let i = 0; i < 7; i++) { const a = (i / 7) * TAU; put(fire, geo('stone', () => new THREE.IcosahedronGeometry(0.14, 0)), mat('#8a84b8'), Math.cos(a) * 0.4, 0.07, Math.sin(a) * 0.4); }
     box(fire, 0.6, 0.09, 0.09, 0, 0.12, 0, '#8a5a44').rotation.y = 0.6;
     box(fire, 0.6, 0.09, 0.09, 0, 0.12, 0, '#8a5a44').rotation.y = -0.6;
@@ -792,10 +610,6 @@ export async function createWorld(opts) {
       const m = new THREE.Mesh(geo('smoke', () => new THREE.IcosahedronGeometry(0.14, 0)), new THREE.MeshLambertMaterial({ color: '#efeaff', transparent: true, opacity: 0.5, flatShading: true }));
       fire.add(m); smoke.push({ m, off: i / 5 });
     }
-    // little log seats around the fire
-    [[-0.3, 1.0, 0.4], [1.9, 1.0, -0.5]].forEach(([a, r, ry]) => {
-      const seat = cyl(fire, 0.17, 0.17, 0.55, 8, Math.cos(a) * r * 1.2, 0.17, Math.sin(a) * r * 1.2, '#a9714f'); seat.rotation.z = Math.PI / 2; seat.rotation.y = ry;
-    });
     animators.push((dt, t) => {
       const f = 0.85 + Math.sin(t * 13) * 0.1 + Math.sin(t * 7.3) * 0.08;
       flameA.scale.set(1, f, 1); flameB.scale.set(1, 1.1 - (f - 0.85), 1); fglow.material.opacity = 0.45 + (f - 0.85) * 1.2;
@@ -807,21 +621,18 @@ export async function createWorld(opts) {
     });
 
     // me: waving beside the fire
-    const me = makePerson({ shirt: '#ff6b5e', pants: '#2b2850', hair: '#241f4d', backpack: '#e8b23a', skin: '#e9b48d', hairStyle: 'short', shoes: '#fff8ec' });
-    me.group.position.set(-4.5, 0, 7.4); me.group.rotation.y = -Math.PI / 3; W.add(me.group);
-    me.armR.rotation.z = 0.05;
+    const me = makePerson({ shirt: '#ff6b5e', pants: '#2b2850', hair: '#241f4d', backpack: '#e8b23a' });
+    me.group.position.set(-4.5, 0, 7.4); me.group.rotation.y = -Math.PI / 3; scene.add(me.group);
+    me.armR.rotation.x = 0.1;
     animators.push((dt, t) => {
-      me.armL.rotation.x = -(2.3 + Math.sin(t * 2) * 0.12);        // waving arm raised
-      me.elbowL.rotation.x = Math.sin(t * 8) * 0.55;               // hand waves side to side
+      me.armL.rotation.x = -(2.35 + Math.sin(t * 7) * 0.35);       // waving arm
       me.upper.rotation.z = Math.sin(t * 1.6) * 0.02;
-      me.head.rotation.y = Math.sin(t * 0.9) * 0.25;
-      me.head.rotation.z = Math.sin(t * 1.3) * 0.04;
       me.group.position.y = Math.abs(Math.sin(t * 3.2)) * 0.012;
     });
   });
 
   await stage(0.64, 'Building the Nexora tower', () => {
-    const g = new THREE.Group(); g.position.set(-0.5, 0, -3.2); W.add(g);
+    const g = new THREE.Group(); g.position.set(-0.5, 0, -3.2); scene.add(g);
     cyl(g, 2.0, 2.2, 0.2, 10, 0, 0.1, 0, '#d8d2ff');
     cyl(g, 0.55, 0.78, 1.6, 6, 0, 1.0, 0, '#4b3fa6');
     cyl(g, 0.8, 0.8, 0.1, 6, 0, 0.8, 0, '#5ac8c8');
@@ -850,7 +661,7 @@ export async function createWorld(opts) {
   });
 
   await stage(0.72, 'Planting the farm', () => {
-    const g = new THREE.Group(); g.position.set(9.8, 0, 0.2); W.add(g);
+    const g = new THREE.Group(); g.position.set(9.8, 0, 0.2); scene.add(g);
     // three terraced crop beds
     const cropCount = 3 * 9, crops = new THREE.InstancedMesh(geo('crop', () => new THREE.ConeGeometry(0.17, 0.42, 5)), new THREE.MeshLambertMaterial({ flatShading: true }), cropCount);
     const dummy = new THREE.Object3D(), green = new THREE.Color('#7ed957'), gold = new THREE.Color('#f2c14e');
@@ -863,10 +674,6 @@ export async function createWorld(opts) {
       }
     });
     crops.castShadow = true; g.add(crops);
-
-    // wooden fence in front of the farm
-    for (let i = 0; i < 9; i++) box(g, 0.07, 0.42, 0.07, -1.5 + i * 0.5, 0.21, 2.45, '#b9825f');
-    box(g, 4.1, 0.05, 0.05, 0.5, 0.33, 2.45, '#c9966f'); box(g, 4.1, 0.05, 0.05, 0.5, 0.16, 2.45, '#c9966f');
 
     // windmill
     const mill = new THREE.Group(); mill.position.set(-2.6, 0, 0.3); g.add(mill);
@@ -883,20 +690,17 @@ export async function createWorld(opts) {
     box(barn, 0.36, 0.5, 0.04, 0, 0.25, 0.54, '#fff1dc');
 
     // farmer
-    const farmer = makePerson({ shirt: '#4fae7a', pants: '#6c58cf', hair: '#5a3b2a', hat: 'straw', skin: '#d9a07a', longSleeve: false, shoes: '#8a5a44' });
+    const farmer = makePerson({ shirt: '#4fae7a', pants: '#6c58cf', hair: '#2b2850', hat: 'straw' });
     farmer.group.position.set(1.7, 0.0, 0.75); faceDir(farmer.group, -1, 0.4); g.add(farmer.group);
     animators.push((dt, t) => {                        // bends down to tend the crops, then straightens up
       const k = (Math.sin(t * 0.9) + 1) / 2;
-      farmer.upper.rotation.z = -k * 0.7;
-      farmer.armL.rotation.z = k * 0.95; farmer.armR.rotation.z = k * 0.95;
-      farmer.head.rotation.z = k * 0.5;                // keeps looking forward while bending
-      farmer.legL.rotation.z = k * 0.12; farmer.legR.rotation.z = k * 0.12;
+      farmer.upper.rotation.z = -k * 0.7; farmer.armL.rotation.z = -k * 0.5; farmer.armR.rotation.z = -k * 0.5;
     });
   });
 
   await stage(0.8, 'Raising the signpost and mailbox', () => {
     // Skills signpost with five arrow boards and orbiting cubes
-    const g = new THREE.Group(); g.position.set(2.0, 0, 9.5); W.add(g);
+    const g = new THREE.Group(); g.position.set(2.0, 0, 9.5); scene.add(g);
     cyl(g, 0.7, 0.9, 0.15, 8, 0, 0.07, 0, '#4fae7a');
     cyl(g, 0.07, 0.09, 2.5, 6, 0, 1.25, 0, '#8a5a44');
     const arrow = new THREE.Shape();
@@ -913,12 +717,12 @@ export async function createWorld(opts) {
     animators.push((dt, t) => { cubes.rotation.y = t * 0.6; cubes.position.y = 2.75 + Math.sin(t * 1.4) * 0.08; });
 
     // Contact mailbox with a paper plane
-    const mb = new THREE.Group(); mb.position.set(10.8, 0, 6.6); mb.rotation.y = -0.9; W.add(mb);
+    const mb = new THREE.Group(); mb.position.set(10.8, 0, 6.6); mb.rotation.y = -0.9; scene.add(mb);
     box(mb, 0.12, 1.1, 0.12, 0, 0.55, 0, '#8a5a44');
     box(mb, 0.74, 0.4, 0.46, 0, 1.2, 0, '#ff6b5e'); box(mb, 0.66, 0.1, 0.38, 0, 1.45, 0, '#e8564a');
     box(mb, 0.04, 0.3, 0.04, 0.2, 0, 0, '#e8b23a');
     const flag = new THREE.Group(); flag.position.set(0.2, 1.2, 0.26); mb.add(flag); box(flag, 0.05, 0.32, 0.05, 0, 0.16, 0, '#e8b23a'); box(flag, 0.2, 0.12, 0.04, 0.1, 0.3, 0, '#e8b23a');
-    const planeG = new THREE.Group(); W.add(planeG);
+    const planeG = new THREE.Group(); scene.add(planeG);
     const plane = new THREE.Mesh(geo('plane', () => new THREE.ConeGeometry(0.14, 0.55, 3)), new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true, emissive: '#cfe6ff', emissiveIntensity: 0.3 }));
     plane.castShadow = true; plane.rotation.z = -Math.PI / 2; plane.scale.set(1, 1, 0.35); planeG.add(plane);   // cone tip points forward (+x)
     animators.push((dt, t) => {
@@ -929,7 +733,7 @@ export async function createWorld(opts) {
     });
 
     // Education: the little school
-    const s = new THREE.Group(); s.position.set(-9.6, 0, -1.2); s.rotation.y = 0.5; W.add(s);
+    const s = new THREE.Group(); s.position.set(-9.6, 0, -1.2); s.rotation.y = 0.5; scene.add(s);
     box(s, 1.9, 0.95, 1.25, 0, 0.48, 0, '#fff1dc'); prism(s, 1.1, 1.3, 0, 1.25, 0, '#ff6b5e', 0.55);
     box(s, 0.34, 0.55, 0.04, 0, 0.28, 0.64, '#6c58cf');
     [-0.6, 0.6].forEach((x) => box(s, 0.32, 0.3, 0.04, x, 0.6, 0.64, '#bfe4ff'));
@@ -937,28 +741,14 @@ export async function createWorld(opts) {
     cyl(s, 0.03, 0.03, 1.6, 5, 1.4, 0.8, 0.7, '#d8d2ff');
     const sflag = box(s, 0.5, 0.28, 0.03, 1.65, 1.5, 0.7, '#ff6b5e');
     animators.push((dt, t) => { sflag.rotation.y = Math.sin(t * 3) * 0.25; });
-
-    // Lamp posts along the road: warm glowing bulbs
-    const bulbs = [];
-    [0.1, 0.24, 0.38, 0.52, 0.66, 0.8, 0.93].forEach((u, i) => {
-      const p = roadCurve.getPointAt(u), tg = roadCurve.getTangentAt(u), side = i % 2 ? 1.5 : -1.5;
-      const x = p.x + tg.z * side, z = p.z - tg.x * side;
-      if (Math.hypot(x, z) > 12.5) return;
-      const lamp = new THREE.Group(); lamp.position.set(x, terrainH(x, z), z); W.add(lamp);
-      cyl(lamp, 0.03, 0.045, 1.05, 6, 0, 0.52, 0, '#2b2850');
-      box(lamp, 0.22, 0.04, 0.04, 0.08, 1.04, 0, '#2b2850');
-      const bulb = ball(lamp, 0.09, 0.16, 0.98, 0, '#fff3b0', { emissive: '#ffd36e', emissiveIntensity: 1 }); bulb.castShadow = false;
-      bulbs.push(glow(lamp, 0xffd36e, 1.1, 0.45, 0.16, 0.98, 0));
-    });
-    animators.push((dt, t) => bulbs.forEach((b, i) => { b.material.opacity = 0.4 + Math.sin(t * 2 + i) * 0.08; }));
   });
 
   /* ---------------------------------------------------------------- */
-  /* 6. people on the move: hiker, cyclist, fisher, student            */
+  /* 6. people on the move: hiker and cyclist                          */
   /* ---------------------------------------------------------------- */
   await stage(0.86, 'Waking up the villagers', () => {
-    const hiker = makePerson({ shirt: '#8f7fe6', pants: '#3a3568', hair: '#7a4a32', backpack: '#ff6b5e', skin: '#f6d2b4', hairStyle: 'pony', hat: undefined, shoes: '#8a5a44' });
-    W.add(hiker.group);
+    const hiker = makePerson({ shirt: '#8f7fe6', pants: '#2b2850', hair: '#8a5a44', backpack: '#ff6b5e' });
+    scene.add(hiker.group);
     const walker = { u: 0.62, dir: 1, heading: 0 };
     const pt = new THREE.Vector3(), tg = new THREE.Vector3();
     animators.push((dt, t) => {
@@ -972,24 +762,18 @@ export async function createWorld(opts) {
       hiker.group.rotation.y = walker.heading;
       const sw = Math.sin(t * 6) * 0.6;
       hiker.legL.rotation.z = sw; hiker.legR.rotation.z = -sw; hiker.armL.rotation.z = -sw * 0.8; hiker.armR.rotation.z = sw * 0.8;
-      hiker.shinL.rotation.z = -(0.5 + 0.5 * Math.sin(t * 6 + 1.6)) * 0.55;       // knees bend while walking
-      hiker.shinR.rotation.z = -(0.5 + 0.5 * Math.sin(t * 6 + 1.6 + Math.PI)) * 0.55;
-      hiker.elbowL.rotation.z = 0.35 + Math.max(0, sw) * 0.3; hiker.elbowR.rotation.z = 0.35 + Math.max(0, -sw) * 0.3;
-      hiker.upper.rotation.z = -0.06;
-      hiker.head.rotation.y = Math.sin(t * 0.8) * 0.2;
     });
 
     // cyclist
-    const bike = new THREE.Group(); W.add(bike);
+    const bike = new THREE.Group(); scene.add(bike);
     const wheelGeo = geo('wheel', () => new THREE.TorusGeometry(0.28, 0.035, 6, 16)), wm = mat('#2b2850');
     const wf = put(bike, wheelGeo, wm, 0.42, 0.3, 0), wr = put(bike, wheelGeo, wm, -0.42, 0.3, 0);
     box(bike, 0.75, 0.04, 0.04, 0, 0.5, 0, '#ff6b5e'); box(bike, 0.04, 0.4, 0.04, -0.18, 0.4, 0, '#ff6b5e');
     box(bike, 0.04, 0.45, 0.04, 0.4, 0.45, 0, '#ff6b5e').rotation.z = -0.25;
     box(bike, 0.04, 0.04, 0.34, 0.43, 0.7, 0, '#2b2850'); box(bike, 0.2, 0.05, 0.12, -0.2, 0.62, 0, '#2b2850');
-    const rider = makePerson({ shirt: '#4fae7a', pants: '#2b2850', hair: '#e8b23a', skin: '#c98e68', hairStyle: 'long', shorts: false, shoes: '#ff6b5e' });
-    rider.group.position.set(-0.18, 0.25, 0); rider.group.scale.setScalar(0.92); bike.add(rider.group);
-    rider.upper.rotation.z = -0.3; rider.armL.rotation.z = 1.0; rider.armR.rotation.z = 1.0;
-    rider.elbowL.rotation.z = 0.1; rider.elbowR.rotation.z = 0.1;
+    const rider = makePerson({ shirt: '#4fae7a', pants: '#2b2850', hair: '#e8b23a' });
+    rider.group.position.set(-0.18, 0.28, 0); rider.group.scale.setScalar(0.92); bike.add(rider.group);
+    rider.upper.rotation.z = -0.3; rider.armL.rotation.z = -1.0; rider.armR.rotation.z = -1.0;
     const ride = { u: 0.1, dir: 1, heading: 0 };
     animators.push((dt, t) => {
       ride.u += ride.dir * dt * 0.016;
@@ -1004,50 +788,17 @@ export async function createWorld(opts) {
       wf.rotation.z -= dt * 6; wr.rotation.z -= dt * 6;
       const pedal = t * 6;
       rider.legL.rotation.z = 0.5 + Math.sin(pedal) * 0.6; rider.legR.rotation.z = 0.5 + Math.sin(pedal + Math.PI) * 0.6;
-      rider.shinL.rotation.z = -(0.5 + 0.5 * Math.sin(pedal)) * 1.0;                     // knees pump as she pedals
-      rider.shinR.rotation.z = -(0.5 + 0.5 * Math.sin(pedal + Math.PI)) * 1.0;
-      rider.head.rotation.y = Math.sin(t * 0.7) * 0.15;
-    });
-
-    // fisher at the pond
-    const fx = -3.35, fz = 0.5;
-    const fisher = makePerson({ shirt: '#4fd1e0', pants: '#6a5a45', hair: '#2b2850', hat: 'straw', hatColor: '#4b3fa6', skin: '#e0a98a', longSleeve: true, shoes: '#8a5a44' });
-    fisher.group.position.set(fx, terrainH(fx, fz), fz); faceDir(fisher.group, -1, -0.05); W.add(fisher.group);
-    fisher.armL.rotation.z = 1.15; fisher.armR.rotation.z = 0.95;
-    fisher.elbowL.rotation.z = 0.3; fisher.elbowR.rotation.z = 0.3;
-    const rod = cyl(fisher.group, 0.012, 0.02, 1.6, 6, 0.65, 0.95, 0.05, '#8a5a44'); rod.rotation.z = -1.0; rod.castShadow = false;
-    const lineLen = 0.95;
-    const line = cyl(fisher.group, 0.004, 0.004, lineLen, 4, 1.38, 1.58 - lineLen / 2 - 0.02, 0.05, '#ffffff'); line.castShadow = false;
-    const bobber = ball(fisher.group, 0.035, 1.38, 0.62, 0.05, '#ff6b5e'); bobber.castShadow = false;
-    animators.push((dt, t) => {
-      fisher.upper.rotation.z = Math.sin(t * 0.8) * 0.02 - 0.03;
-      fisher.head.rotation.y = Math.sin(t * 0.5) * 0.12;
-      fisher.head.rotation.z = 0.18;
-      bobber.position.y = 0.62 + Math.sin(t * 2.2) * 0.012;
-      rod.rotation.z = -1.0 + Math.sin(t * 0.7) * 0.02;
-    });
-
-    // student waving by the school door
-    const sx = -8.3, sz = -2.6;
-    const student = makePerson({ shirt: '#ffe08a', pants: '#4b3fa6', hair: '#241f4d', hairStyle: 'pony', backpack: '#5ac8c8', skin: '#e9b48d', shorts: true, shoes: '#ff6b5e' });
-    student.group.position.set(sx, terrainH(sx, sz), sz); faceDir(student.group, 0.5, 1); student.group.scale.setScalar(0.9); W.add(student.group);
-    animators.push((dt, t) => {
-      student.armR.rotation.x = 2.2 + Math.sin(t * 1.8) * 0.12;
-      student.elbowR.rotation.x = -Math.sin(t * 8.5) * 0.55;
-      student.upper.rotation.z = Math.sin(t * 1.4) * 0.025;
-      student.head.rotation.y = Math.sin(t * 0.8) * 0.3;
-      student.group.position.y = terrainH(sx, sz) + Math.abs(Math.sin(t * 2.6)) * 0.02;
     });
   });
 
   /* ---------------------------------------------------------------- */
-  /* 7. atmosphere: clouds, floating rocks, sparkles, birds, butterflies */
+  /* 7. atmosphere: clouds, floating rocks, sparkles                   */
   /* ---------------------------------------------------------------- */
   let cloudsFar;
   await stage(0.92, 'Drifting clouds in', () => {
-    cloudsFar = new THREE.Group(); W.add(cloudsFar);
+    cloudsFar = new THREE.Group(); scene.add(cloudsFar);
     const cloudMat = new THREE.MeshLambertMaterial({ color: '#ffffff', emissive: '#a9bce8', emissiveIntensity: 0.35, flatShading: true });
-    const count = simple ? 7 : 16;
+    const count = simple ? 7 : 15;
     for (let i = 0; i < count; i++) {
       const parts = [], blobs = 4 + Math.floor(rng() * 3);
       for (let b = 0; b < blobs; b++) {
@@ -1065,22 +816,22 @@ export async function createWorld(opts) {
     }
     // small rocks floating around the island
     const floaters = [];
-    for (let i = 0; i < (simple ? 4 : 9); i++) {
+    for (let i = 0; i < (simple ? 4 : 8); i++) {
       const a = rng() * TAU, r = 15.5 + rng() * 4.5;
       const m = new THREE.Mesh(geo('floatrock', () => new THREE.IcosahedronGeometry(1, 0)), mat(i % 2 ? '#5a4aa8' : '#8a84b8'));
       m.position.set(Math.cos(a) * r, -1.5 - rng() * 7, Math.sin(a) * r); m.scale.setScalar(0.35 + rng() * 0.7); m.castShadow = true;
       m.userData = { base: m.position.y, ph: rng() * TAU, sp: 0.4 + rng() * 0.5 };
-      W.add(m); floaters.push(m);
+      scene.add(m); floaters.push(m);
     }
     // sparkles (pollen / fireflies)
-    const N = simple ? 50 : small ? 90 : 170, pp = new Float32Array(N * 3), seeds = [];
+    const N = simple ? 50 : small ? 90 : 150, pp = new Float32Array(N * 3), seeds = [];
     for (let i = 0; i < N; i++) {
       const a = rng() * TAU, r = Math.sqrt(rng()) * 15;
       seeds.push({ x: Math.cos(a) * r, z: Math.sin(a) * r, y: rng() * 9, ph: rng() * TAU, sp: 0.4 + rng() * 0.8 });
     }
     const pg = new THREE.BufferGeometry(); pg.setAttribute('position', new THREE.BufferAttribute(pp, 3));
-    const points = new THREE.Points(pg, new THREE.PointsMaterial({ map: glowTex, size: 0.34, color: 0xfff3b0, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
-    points.frustumCulled = false; W.add(points);
+    const points = new THREE.Points(pg, new THREE.PointsMaterial({ map: glowTex, size: 0.32, color: 0xfff3b0, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    points.frustumCulled = false; scene.add(points);
     const writeSparkles = (t) => {
       seeds.forEach((s, i) => {
         pp[i * 3] = s.x + Math.sin(t * s.sp + s.ph) * 0.7;
@@ -1090,67 +841,24 @@ export async function createWorld(opts) {
       pg.attributes.position.needsUpdate = true;
     };
     writeSparkles(0);
-
-    // birds circling high above the island
-    const birds = [];
-    for (let i = 0; i < (simple ? 2 : 5); i++) {
-      const b = new THREE.Group();
-      const body = put(b, geo('birdbody', () => new THREE.ConeGeometry(0.08, 0.42, 5)), mat(i % 2 ? '#ffffff' : '#fff1dc'), 0, 0, 0, false); body.rotation.z = -Math.PI / 2;
-      const wl = new THREE.Group(), wr = new THREE.Group(); b.add(wl, wr);
-      put(wl, geo('wing', () => new THREE.BoxGeometry(0.2, 0.015, 0.4)), mat('#ffffff'), 0, 0, 0.2, false);
-      put(wr, geo('wing', () => new THREE.BoxGeometry(0.2, 0.015, 0.4)), mat('#ffffff'), 0, 0, -0.2, false);
-      W.add(b); birds.push({ b, wl, wr, rad: 9 + i * 1.6, h: 10.5 + (i % 3) * 1.4, sp: 0.18 + i * 0.012, off: i * 1.3 });
-    }
-    // butterflies fluttering over the meadow
-    const flies = [];
-    for (let i = 0; i < (simple ? 3 : 9); i++) {
-      let cx = 0, cz = 0;
-      for (let k = 0; k < 40; k++) {
-        const rr = Math.sqrt(rng()) * 11, a = rng() * TAU; cx = rr * Math.cos(a); cz = rr * Math.sin(a);
-        if (terrainH(cx, cz) < 0.5) break;
-      }
-      const f = new THREE.Group(), col = ['#ff9fb8', '#ffe08a', '#7ee8ff', '#c9a7ff'][i % 4];
-      const wl = new THREE.Group(), wr = new THREE.Group(); f.add(wl, wr);
-      put(wl, geo('bwing', () => new THREE.BoxGeometry(0.1, 0.008, 0.11)), mat(col), 0, 0, 0.055, false);
-      put(wr, geo('bwing', () => new THREE.BoxGeometry(0.1, 0.008, 0.11)), mat(col), 0, 0, -0.055, false);
-      put(f, geo('bbody', () => new THREE.BoxGeometry(0.1, 0.02, 0.02)), mat('#2b2850'), 0, 0, 0, false);
-      W.add(f); flies.push({ f, wl, wr, cx, cz, ph: rng() * TAU, r: 0.8 + rng() * 1.1, sp: 0.4 + rng() * 0.4 });
-    }
-
     animators.push((dt, t) => {
       writeSparkles(t);
       cloudsFar.rotation.y += dt * 0.004;
       cloudsFar.children.forEach((c) => { c.position.y += Math.sin(t * 0.3 + c.userData.bob) * dt * 0.05; });
       floaters.forEach((f) => { f.position.y = f.userData.base + Math.sin(t * f.userData.sp + f.userData.ph) * 0.4; f.rotation.y += dt * 0.2; });
-      birds.forEach((o) => {
-        const a = t * o.sp + o.off, flap = Math.sin(t * 9 + o.off * 3) * 0.7;
-        o.b.position.set(Math.cos(a) * o.rad, o.h + Math.sin(t * 0.7 + o.off) * 0.4, Math.sin(a) * o.rad);
-        o.b.rotation.y = -Math.atan2(Math.cos(a), -Math.sin(a));
-        o.b.rotation.x = -0.15;
-        o.wl.rotation.x = flap; o.wr.rotation.x = -flap;
-      });
-      flies.forEach((o) => {
-        const a = t * o.sp + o.ph, flap = 0.2 + Math.abs(Math.sin(t * 14 + o.ph)) * 1.1;
-        const x = o.cx + Math.cos(a) * o.r, z = o.cz + Math.sin(a * 1.3) * o.r;
-        o.f.position.set(x, terrainH(o.cx, o.cz) + 0.7 + Math.sin(a * 2.1) * 0.35, z);
-        o.f.rotation.y = -Math.atan2(Math.cos(a * 1.3) * 1.3, -Math.sin(a));
-        o.wl.rotation.x = flap; o.wr.rotation.x = -flap;
-      });
     });
   });
 
   /* ---------------------------------------------------------------- */
   /* 8. hotspots: glowing markers + click / hover detection            */
   /* ---------------------------------------------------------------- */
-  const markers = new THREE.Group(); scene.add(markers);   // markers live outside W so their size stays constant
+  const markers = new THREE.Group(); scene.add(markers);
   const markerList = [], hitProxies = [];
   let pickId = null, domHoverId = null;
-  const MARK = 1.15;                                       // base size of the glowing markers
 
   (config.hotspots || []).forEach((h, idx) => {
     const color = new THREE.Color(h.color || '#ffffff');
-    const pos = h.position.map((n) => n * S);
-    const g = new THREE.Group(); g.position.fromArray(pos); g.scale.setScalar(MARK); markers.add(g);
+    const g = new THREE.Group(); g.position.fromArray(h.position); markers.add(g);
     const gem = new THREE.Mesh(geo('markgem', () => new THREE.OctahedronGeometry(0.28, 0)), new THREE.MeshBasicMaterial({ color }));
     gem.scale.y = 1.4; g.add(gem);
     const halo = glow(g, color, 2.0, 0.8);
@@ -1158,7 +866,7 @@ export async function createWorld(opts) {
     g.add(ring);
     const proxy = new THREE.Mesh(geo('proxy', () => new THREE.SphereGeometry(1.0, 8, 6)), new THREE.MeshBasicMaterial({ visible: false }));
     proxy.userData.id = h.id; g.add(proxy); hitProxies.push(proxy);
-    markerList.push({ id: h.id, g, gem, halo, ring, base: pos[1], ph: idx * 1.3, hover: 0 });
+    markerList.push({ id: h.id, g, gem, halo, ring, base: h.position[1], ph: idx * 1.3, hover: 0 });
   });
 
   const tmpV = new THREE.Vector3();
@@ -1183,7 +891,7 @@ export async function createWorld(opts) {
     const hot = pickId || domHoverId;
     markerList.forEach((m) => {
       if (animate) {
-        m.g.position.y = m.base + Math.sin(t * 1.8 + m.ph) * 0.14;
+        m.g.position.y = m.base + Math.sin(t * 1.8 + m.ph) * 0.12;
         m.gem.rotation.y += dt * 1.6;
         m.halo.material.opacity = 0.65 + Math.sin(t * 2.6 + m.ph) * 0.18;
         const k = (t * 0.5 + m.ph) % 1;
@@ -1194,7 +902,7 @@ export async function createWorld(opts) {
       const want = hot === m.id ? 1 : 0;
       if (Math.abs(m.hover - want) > 0.002) {
         m.hover = lerp(m.hover, want, Math.min(1, dt * 10));
-        m.g.scale.setScalar(MARK + m.hover * 0.35); dirty = true;
+        m.g.scale.setScalar(1 + m.hover * 0.35); dirty = true;
       }
     });
   });
@@ -1325,7 +1033,6 @@ export async function createWorld(opts) {
   /* ---------------------------------------------------------------- */
   onProgress(0.97, 'Warming up the graphics');
   await pause();
-  scene.updateMatrixWorld(true);                       // so raycasts against the scaled world are correct from frame one
   try {
     if (renderer.compileAsync) await Promise.race([renderer.compileAsync(scene, camera), new Promise((r) => setTimeout(r, 4000))]);
     else renderer.compile(scene, camera);
@@ -1333,7 +1040,7 @@ export async function createWorld(opts) {
 
   // Start far away so playIntro() can swoop in.
   const homeV = views.home;
-  camera.position.set(homeV.position[0] + 22 * CAMERA_SCALE, homeV.position[1] + 24 * CAMERA_SCALE, homeV.position[2] + 34 * CAMERA_SCALE);
+  camera.position.set(homeV.position[0] + 22, homeV.position[1] + 24, homeV.position[2] + 34);
   controls.target.fromArray(homeV.target);
   camera.lookAt(controls.target);
   if (!animate) { camera.position.fromArray(homeV.position); camera.lookAt(controls.target); }
