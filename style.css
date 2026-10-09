@@ -27,6 +27,7 @@
   --teal: #5ac8c8;
   --gold: #e8b23a;
   --green: #4fae7a;
+  --pink: #ff4fa3;         /* Astropulse SMM office sign */
 
   --font-display: 'Bricolage Grotesque', 'Trebuchet MS', 'Segoe UI', system-ui, sans-serif;
   --font-body: 'DM Sans', 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
@@ -167,9 +168,12 @@ body:not(.mode-3d) .topbar { position: sticky; top: 0; z-index: 20; background: 
 .topbar-actions { display: flex; gap: 8px; }
 body:not(.mode-3d) #btn-reset { display: none; }
 
+/* the menu now has 8 links, so it scrolls on short screens */
 .menu {
   position: fixed; z-index: 25; top: calc(68px + var(--safe-t)); right: 16px;
-  min-width: 230px; padding: 10px; border-radius: 22px;
+  min-width: 230px; max-height: calc(100vh - 90px - var(--safe-t)); max-height: calc(100dvh - 90px - var(--safe-t));
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: 10px; border-radius: 22px;
   background: var(--cream); box-shadow: var(--shadow);
   opacity: 0; visibility: hidden; transform: translateY(-8px) scale(0.98); transform-origin: top right;
   transition: opacity 0.2s, transform 0.25s var(--ease), visibility 0.25s;
@@ -224,11 +228,12 @@ body.mode-3d:not([data-view="explore"]) .hotspots { visibility: hidden; }
   position: absolute; left: 0; top: 0; width: 0; height: 0; padding: 0; border: 0; background: none;
   pointer-events: none; will-change: transform; transition: opacity 0.2s;
 }
-.hotspot[data-id="about"]   { --c: #ff6b5e; }
-.hotspot[data-id="skills"]  { --c: #8f7fe6; }
-.hotspot[data-id="nexora"]  { --c: #4fd1e0; }
-.hotspot[data-id="crop"]    { --c: #e8b23a; }
-.hotspot[data-id="contact"] { --c: #4fae7a; }
+.hotspot[data-id="about"]      { --c: #ff6b5e; }
+.hotspot[data-id="skills"]     { --c: #8f7fe6; }
+.hotspot[data-id="nexora"]     { --c: #4fd1e0; }
+.hotspot[data-id="crop"]       { --c: #e8b23a; }
+.hotspot[data-id="astropulse"] { --c: #ff4fa3; }
+.hotspot[data-id="contact"]    { --c: #4fae7a; }
 .hotspot.is-offscreen { opacity: 0; visibility: hidden; }
 .hotspot::before {              /* big invisible tap target around the marker */
   content: ''; position: absolute; left: -30px; top: -30px; width: 60px; height: 60px; border-radius: 50%;
@@ -291,6 +296,7 @@ body.mode-3d .hint.is-visible { opacity: 1; visibility: visible; transform: tran
   background: var(--cream-2); border: 2px solid rgba(36, 31, 77, 0.18); font-size: 0.85rem; font-weight: 700;
 }
 .badge-live { background: #d9f5e6; border-color: var(--green); }
+.badge-pink { background: #ffe0f0; border-color: var(--pink); }
 
 .note {
   margin: 10px 0 0; padding: 4px 0 4px 12px; border-left: 3px solid var(--gold);
@@ -310,6 +316,14 @@ body.mode-3d .hint.is-visible { opacity: 1; visibility: visible; transform: tran
 .chips-quiet li { border-color: rgba(36, 31, 77, 0.3); background: #fff; font-weight: 500; }
 .panel.is-open .chips li { animation: chip-in 0.5s var(--ease) both; animation-delay: calc(var(--i, 0) * 45ms + 300ms); }
 @keyframes chip-in { from { opacity: 0; transform: translateY(10px) scale(0.92); } to { opacity: 1; transform: none; } }
+
+/* Astropulse team list: one row per job */
+.team-list { list-style: none; margin: 0 0 1em; display: grid; gap: 8px; }
+.team-list li {
+  max-width: 62ch; padding: 9px 14px 9px 16px; border-radius: 14px;
+  background: #fff; border-left: 4px solid var(--pink); font-size: 0.95rem;
+}
+.team-list strong { font-family: var(--font-display); }
 
 /* education */
 .facts { margin: 22px 0 0; }
@@ -389,6 +403,7 @@ body:not(.mode-3d) .chips li { animation: none; }
   .chip-btn { padding: 0 12px; }
   #btn-reset .btn-label, #btn-sound .btn-label, .chip-btn-menu .btn-label { display: none; }
   .menu { right: 12px; top: calc(62px + var(--safe-t)); min-width: 210px; }
+  .menu a { padding: 10px 16px; font-size: 1.08rem; }
 
   /* home text sits at the bottom, over a soft fade, so the world stays visible above it */
   body.mode-3d .hero {
