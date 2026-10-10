@@ -377,6 +377,7 @@ export async function createWorld(opts) {
     { x: -9.6, z: -1.2, r: 2.0, y: 0 },   // school
     { x: -5.6, z: 0.3, r: 2.0, y: -0.18 }, // pond
     { x: -1.4, z: 10.8, r: 1.5, y: 0 },   // village house
+    { x: -15.5, z: 7.5, r: 6.0, y: 0 },   // HealthGIS HQ courtyard
   ];
   // The long road: west edge -> village -> farm -> down the hill into the city's avenue.
   const roadPts = [
@@ -392,10 +393,11 @@ export async function createWorld(opts) {
   }
 
   // Height of the ground at any (x, z). Used to build the island AND to place objects on it.
+  const HILL_SOFTEN = 0.62;    // tones the mountains down so the map reads as a city with hills at its edges, not an island peak
   function terrainH(x, z) {
     const r = Math.hypot(x, z);
     let h = 0;
-    for (const b of BUMPS) { const d = Math.hypot(x - b[0], z - b[1]); if (d < b[3]) h += b[2] * Math.pow(1 - d / b[3], 1.6); }
+    for (const b of BUMPS) { const d = Math.hypot(x - b[0], z - b[1]); if (d < b[3]) h += b[2] * HILL_SOFTEN * Math.pow(1 - d / b[3], 1.6); }
     if (h > 0.3) h += (vnoise(x * 0.9, z * 0.9) - 0.5) * 0.55 * Math.min(1, h / 3);
     h *= 1 - smoothstep(R - 4, R - 0.6, r);
     h += (vnoise(x * 0.35 + 10, z * 0.35) - 0.5) * 0.35 * (1 - Math.min(1, h / 1.2));
@@ -892,10 +894,10 @@ export async function createWorld(opts) {
   }
 
   // Shared state used by the city and the people.
-  const gate = { pos: 0, target: 0 };                  // the Astropulse sliding gate (0 = closed, 1 = open)
   const doors = [];                                    // every house door: { pivot, open, target }
-  const monitorMats = [];                              // office screens that flicker
-  let hqGroup = null;
+  const monitorMats = [];                              // office screens that flicker, shared by every office building
+  let hqGroup = null;                                   // Astropulse SMM's group
+  let hq2Group = null;                                  // HealthGIS's group
 
   function makeHouse(x, z, face, wall, roof) {
     const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = face; W.add(g);
@@ -1186,31 +1188,39 @@ export async function createWorld(opts) {
   });
 
   /* ---------------------------------------------------------------- */
-  /* 7. ASTROPULSE SMM: office, gate, courtyard                         */
+  /* 7. project office buildings: Astropulse SMM + HealthGIS             */
   /* ---------------------------------------------------------------- */
-  const HQ = { x: -6.0, z: 18.0 };
-  const FLOOR = 0.14;                                 // floor height inside the office
+  const HQ = { x: -6.0, z: 18.0 };                    // Astropulse SMM
+  const HQ2 = { x: -15.5, z: 7.5 };                   // HealthGIS (site.je)
+  const FLOOR = 0.14;                                 // floor height inside an office
 
-  await stage(0.68, 'Building the Astropulse SMM office', () => {
-    const H = new THREE.Group(); H.position.set(HQ.x, 0, HQ.z); W.add(H); hqGroup = H;
+  /* buildOfficeHQ(o): one project's office building — glass ground floor, two upper
+     floors of desks, a tower with a project sign, a courtyard, a sliding gate and a
+     guard booth. Astropulse SMM and HealthGIS are both built from this, just with
+     different positions, brand colours and desk-screen colours. Returns { H, gate }
+     so the agents section below can seat employees in it and open its gate.     */
+  function buildOfficeHQ(o) {
+
+    const H = new THREE.Group(); H.position.set(o.x, 0, o.z); W.add(H);
+    const gate = { pos: 0, target: 0 };                // this building's own sliding gate (0 = closed, 1 = open)
     const bx = (sx, sy, sz, x, y, z, c, o) => box(H, sx, sy, sz, x, y, z, c, o);
     const glass = (sx, sy, sz, x, y, z) => { const m = bx(sx, sy, sz, x, y, z, '#bfe4ff', { transparent: true, opacity: 0.2, depthWrite: false }); m.castShadow = false; return m; };
 
     // the sign
     const signTex = canvasTextureWH(1024, 176, (g, w, h) => {
-      const gr = g.createLinearGradient(0, 0, w, 0); gr.addColorStop(0, '#241f4d'); gr.addColorStop(1, '#4b3fa6');
+      const gr = g.createLinearGradient(0, 0, w, 0); gr.addColorStop(0, '#241f4d'); gr.addColorStop(1, o.tower);
       g.fillStyle = gr; g.fillRect(0, 0, w, h);
-      g.fillStyle = '#ff4fa3'; g.beginPath(); g.arc(88, h / 2, 54, 0, TAU); g.fill();
+      g.fillStyle = o.accent; g.beginPath(); g.arc(88, h / 2, 54, 0, TAU); g.fill();
       g.strokeStyle = '#ffffff'; g.lineWidth = 8; g.lineCap = 'round'; g.lineJoin = 'round'; g.beginPath();
       [[52, 90], [72, 90], [82, 52], [96, 124], [106, 90], [124, 90]].forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
       g.stroke();                                                                  // the "pulse" in the logo
       let fs = 86; g.textBaseline = 'middle'; g.font = `800 ${fs}px system-ui, "Segoe UI", Arial, sans-serif`;
-      const full = () => g.measureText('ASTROPULSE SMM').width;
+      const full = () => g.measureText(o.nameA + ' ' + o.nameB).width;
       while (full() > w - 210 && fs > 40) { fs -= 4; g.font = `800 ${fs}px system-ui, "Segoe UI", Arial, sans-serif`; }
-      g.fillStyle = '#ffffff'; g.fillText('ASTROPULSE', 170, h / 2 + 2);
-      const wA = g.measureText('ASTROPULSE ').width;
-      g.fillStyle = '#ff6fb5'; g.fillText('SMM', 170 + wA, h / 2 + 2);
-      g.strokeStyle = '#4fd1e0'; g.lineWidth = 4; g.beginPath(); g.moveTo(170, h - 14); g.lineTo(w - 30, h - 14); g.stroke();
+      g.fillStyle = '#ffffff'; g.fillText(o.nameA, 170, h / 2 + 2);
+      const wA = g.measureText(o.nameA + ' ').width;
+      g.fillStyle = o.accentLight; g.fillText(o.nameB, 170 + wA, h / 2 + 2);
+      g.strokeStyle = o.accent2; g.lineWidth = 4; g.beginPath(); g.moveTo(170, h - 14); g.lineTo(w - 30, h - 14); g.stroke();
     });
     const signMat = new THREE.MeshBasicMaterial({ map: signTex, fog: false });
 
@@ -1223,34 +1233,34 @@ export async function createWorld(opts) {
     const fence = (x0, z0, x1, z1) => {
       const len = Math.hypot(x1 - x0, z1 - z0), n = Math.max(1, Math.round(len / 0.75)), ang = -Math.atan2(z1 - z0, x1 - x0);
       for (let i = 0; i <= n; i++) { const f = i / n; bx(0.07, 0.5, 0.07, x0 + (x1 - x0) * f, 0.27, z0 + (z1 - z0) * f, '#fff1dc'); }
-      [0.22, 0.42].forEach((y) => { const m = bx(len, 0.04, 0.04, (x0 + x1) / 2, y, (z0 + z1) / 2, '#ff4fa3'); m.rotation.y = ang; });
+      [0.22, 0.42].forEach((y) => { const m = bx(len, 0.04, 0.04, (x0 + x1) / 2, y, (z0 + z1) / 2, o.accent); m.rotation.y = ang; });
     };
     fence(-4.8, -3.2, -4.8, 3.2); fence(4.8, -3.2, 4.8, 3.2); fence(-4.8, 3.2, -1.2, 3.2); fence(1.2, 3.2, 4.8, 3.2);
 
     /* ---- the building: glass ground floor, two solid floors, a tower ---- */
-    bx(7.6, 0.12, 3.9, 0, 0.06, -1.2, '#eae6ff');                                   // floor slab
-    bx(7.2, 0.02, 3.4, 0, 0.13, -1.2, '#cfc8f5').castShadow = false;                // carpet
-    bx(7.4, 1.3, 0.12, 0, 0.8, -3.0, '#e9e4ff');                                    // back wall
+    bx(7.6, 0.12, 3.9, 0, 0.06, -1.2, o.wallTint);                                   // floor slab
+    bx(7.2, 0.02, 3.4, 0, 0.13, -1.2, o.wallTint).castShadow = false;                // carpet
+    bx(7.4, 1.3, 0.12, 0, 0.8, -3.0, o.wallTint);                                    // back wall
     glass(7.3, 1.1, 0.03, 0, 0.75, 0.58);                                           // front glass
     glass(0.03, 1.1, 3.5, -3.7, 0.75, -1.2); glass(0.03, 1.1, 3.5, 3.7, 0.75, -1.2);
-    bx(0.9, 1.05, 0.05, 0, 0.7, 0.6, '#ff4fa3', { transparent: true, opacity: 0.35, depthWrite: false }).castShadow = false;   // glass door
+    bx(0.9, 1.05, 0.05, 0, 0.7, 0.6, o.accent, { transparent: true, opacity: 0.35, depthWrite: false }).castShadow = false;   // glass door
     for (let i = 0; i < 5; i++) bx(0.16, 1.3, 0.16, -3.65 + i * 1.825, 0.79, 0.58, '#fff8ec');
     bx(7.8, 0.14, 4.0, 0, 1.38, -1.2, '#fff8ec');                                   // ceiling / floor above
     bx(1.4, 0.08, 0.6, 0, 0.04, 0.95, '#d8d2ff');                                   // entrance step
     [-2.4, 0, 2.4].forEach((x) => bx(1.2, 0.04, 0.2, x, 1.34, -1.2, '#fffbe8', { emissive: '#fff3b0', emissiveIntensity: 0.9 }).castShadow = false);
 
-    bx(7.4, 0.9, 3.5, 0, 1.9, -1.25, '#f1ecff');                                    // floor 2
-    bx(7.5, 0.06, 3.6, 0, 2.37, -1.25, '#ff4fa3');
-    [-2.7, -1.35, 0, 1.35, 2.7].forEach((x) => bx(0.9, 0.5, 0.03, x, 1.9, 0.52, '#9ff3ff', { emissive: '#4fd1e0', emissiveIntensity: 0.45 }));
-    [-2.2, -0.9].forEach((z) => { bx(0.03, 0.5, 0.9, -3.71, 1.9, z, '#9ff3ff', { emissive: '#4fd1e0', emissiveIntensity: 0.45 }); bx(0.03, 0.5, 0.9, 3.71, 1.9, z, '#9ff3ff', { emissive: '#4fd1e0', emissiveIntensity: 0.45 }); });
+    bx(7.4, 0.9, 3.5, 0, 1.9, -1.25, o.wallTint);                                    // floor 2
+    bx(7.5, 0.06, 3.6, 0, 2.37, -1.25, o.accent);
+    [-2.7, -1.35, 0, 1.35, 2.7].forEach((x) => bx(0.9, 0.5, 0.03, x, 1.9, 0.52, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.45 }));
+    [-2.2, -0.9].forEach((z) => { bx(0.03, 0.5, 0.9, -3.71, 1.9, z, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.45 }); bx(0.03, 0.5, 0.9, 3.71, 1.9, z, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.45 }); });
     bx(6.0, 0.8, 3.1, 0, 2.78, -1.45, '#2b2850');                                   // floor 3 (carries the sign)
-    const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 0.79), signMat); sign.position.set(0, 2.78, 0.14); H.add(sign);
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 0.534), signMat); sign.position.set(0, 2.78, 0.14); H.add(sign);
     bx(6.2, 0.1, 3.3, 0, 3.22, -1.45, '#3a2f5b');
-    bx(2.6, 2.0, 2.4, 0, 4.27, -1.7, '#4b3fa6');                                    // tower
-    [3.7, 4.3, 4.9].forEach((y) => [-0.85, 0, 0.85].forEach((x) => bx(0.4, 0.34, 0.03, x, y, -0.48, '#9ff3ff', { emissive: '#4fd1e0', emissiveIntensity: 0.7 })));
+    bx(2.6, 2.0, 2.4, 0, 4.27, -1.7, o.tower);                                    // tower
+    [3.7, 4.3, 4.9].forEach((y) => [-0.85, 0, 0.85].forEach((x) => bx(0.4, 0.34, 0.03, x, y, -0.48, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.7 })));
     bx(2.8, 0.12, 2.6, 0, 5.33, -1.7, '#241f4d');
     cyl(H, 0.04, 0.05, 1.0, 6, 0, 5.9, -1.7, '#d8d2ff');
-    const orb = ball(H, 0.2, 0, 6.5, -1.7, '#ff4fa3', { emissive: '#ff4fa3', emissiveIntensity: 1 }); orb.castShadow = false;
+    const orb = ball(H, 0.2, 0, 6.5, -1.7, o.accent, { emissive: o.accent, emissiveIntensity: 1 }); orb.castShadow = false;
     const orbGlow = glow(H, 0xff4fa3, 3.4, 0.7, 0, 6.5, -1.7);
     const pulses = [0, 1].map((i) => {                                              // pulse rings: the "Astropulse" heartbeat
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: ringTex, color: 0xff7fc0, transparent: true, depthWrite: false, fog: false }));
@@ -1258,13 +1268,13 @@ export async function createWorld(opts) {
     });
 
     // inside: wall posters, whiteboard, coffee corner
-    [[-2.6, '#ff4fa3'], [-1.4, '#4fd1e0'], [-0.2, '#ffe08a']].forEach(([x, c]) => bx(0.55, 0.38, 0.02, x, 1.0, -2.93, c, { emissive: c, emissiveIntensity: 0.25 }));
+    [[-2.6, o.accent], [-1.4, o.accent2], [-0.2, '#ffe08a']].forEach(([x, c]) => bx(0.55, 0.38, 0.02, x, 1.0, -2.93, c, { emissive: c, emissiveIntensity: 0.25 }));
     bx(1.5, 0.8, 0.04, 3.0, 0.9, -2.93, '#ffffff');
-    [['#ff4fa3', 0.5, 1.12], ['#4fd1e0', 0.9, 1.0], ['#8f7fe6', 0.7, 0.88]].forEach(([c, w, y]) => bx(w, 0.04, 0.02, 2.8, y, -2.9, c));
-    bx(0.5, 0.6, 0.4, 3.35, 0.44, -0.55, '#2b2850'); bx(0.4, 0.2, 0.3, 3.35, 0.84, -0.55, '#ff4fa3');
+    [[o.accent, 0.5, 1.12], [o.accent2, 0.9, 1.0], ['#8f7fe6', 0.7, 0.88]].forEach(([c, w, y]) => bx(w, 0.04, 0.02, 2.8, y, -2.9, c));
+    bx(0.5, 0.6, 0.4, 3.35, 0.44, -0.55, '#2b2850'); bx(0.4, 0.2, 0.3, 3.35, 0.84, -0.55, o.accent);
 
     // desks (people sit at x, facing -x; the desk is in front of them)
-    const DESK_X = [-2.6, -1.1, 0.4, 1.9], screenColors = ['#9ff3ff', '#ffb3c7', '#ffe08a', '#b6ffcf'];
+    const DESK_X = [-2.6, -1.1, 0.4, 1.9], screenColors = o.deskColors;
     DESK_X.forEach((x, i) => {
       const z = -1.55;
       bx(0.5, 0.04, 1.0, x - 0.62, FLOOR + 0.64, z, '#fff8ec');
@@ -1282,12 +1292,12 @@ export async function createWorld(opts) {
     /* ---- the sliding gate, posts, lamps, sign ---- */
     [-1.05, 1.05].forEach((x) => bx(0.2, 1.0, 0.2, x, 0.52, 3.2, '#fff1dc'));
     bx(2.3, 0.1, 0.12, 0, 1.05, 3.2, '#3a2f5b');
-    const gateSign = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 0.395), signMat); gateSign.position.set(0, 1.28, 3.28); H.add(gateSign);
-    const gateSign2 = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 0.395), signMat); gateSign2.position.set(0, 1.28, 3.12); gateSign2.rotation.y = Math.PI; H.add(gateSign2);
+    const gateSign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.275), signMat); gateSign.position.set(0, 1.28, 3.28); H.add(gateSign);
+    const gateSign2 = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.275), signMat); gateSign2.position.set(0, 1.28, 3.12); gateSign2.rotation.y = Math.PI; H.add(gateSign2);
     const makePanel = () => {
       const p = new THREE.Group(); H.add(p);
       box(p, 0.95, 0.5, 0.05, 0, 0.32, 0, '#3a2f5b');
-      for (let k = -2; k <= 2; k++) box(p, 0.05, 0.5, 0.07, k * 0.19, 0.32, 0, '#ff4fa3');
+      for (let k = -2; k <= 2; k++) box(p, 0.05, 0.5, 0.07, k * 0.19, 0.32, 0, o.accent);
       return p;
     };
     const gateL = makePanel(), gateR = makePanel();
@@ -1297,7 +1307,7 @@ export async function createWorld(opts) {
 
     // guard booth, planters
     bx(0.9, 0.95, 0.85, 2.45, 0.48, 2.65, '#fff1dc');
-    bx(1.1, 0.08, 1.05, 2.45, 1.0, 2.65, '#ff4fa3');
+    bx(1.1, 0.08, 1.05, 2.45, 1.0, 2.65, o.accent);
     glass(0.03, 0.5, 0.6, 2.0, 0.62, 2.65);
     [[-3.4, 1.25], [-3.4, 2.45], [3.4, 1.25]].forEach(([x, z], i) => {
       bx(0.9, 0.22, 0.5, x, 0.15, z, '#a9714f');
@@ -1314,6 +1324,24 @@ export async function createWorld(opts) {
       orbGlow.material.opacity = 0.55 + Math.sin(t * 3) * 0.2;
       pulses.forEach((p) => { const k = (t * 0.55 + p.off) % 1; p.s.scale.setScalar(0.6 + k * 3.4); p.s.material.opacity = (1 - k) * 0.8; });
     });
+    return { H, gate };
+  }
+
+  let astropulseHQ, healthgisHQ;
+  await stage(0.68, 'Building the project offices', () => {
+    astropulseHQ = buildOfficeHQ({
+      x: HQ.x, z: HQ.z, nameA: 'ASTROPULSE', nameB: 'SMM', accent: '#ff4fa3', accentLight: '#ff6fb5',
+      accent2: '#4fd1e0', tower: '#4b3fa6', wallTint: '#eae6ff',
+      deskColors: ['#9ff3ff', '#ffb3c7', '#ffe08a', '#b6ffcf'],
+    });
+    hqGroup = astropulseHQ.H;
+
+    healthgisHQ = buildOfficeHQ({
+      x: HQ2.x, z: HQ2.z, nameA: 'HEALTHGIS', nameB: '.SITE.JE', accent: '#1fbf8f', accentLight: '#5be0b8',
+      accent2: '#2e8bff', tower: '#0f6b52', wallTint: '#e6f7f1',
+      deskColors: ['#bfe3ff', '#b7ffe6', '#fff0b3', '#d8ffcf'],
+    });
+    hq2Group = healthgisHQ.H;
   });
 
   /* ---------------------------------------------------------------- */
@@ -1534,7 +1562,7 @@ export async function createWorld(opts) {
     makeAgent(guard, H, {
       x: 1.55, z: 2.15, face: [0, 1], ground: hqGround,
       steps: [{ wait: 6, pose: 'idle', face: [0, 1] }, { go: [1.55, 1.5] }, { wait: 4, face: [0, 1] }, { go: [1.55, 2.15] }],
-      tick: (a) => { if (gate.target > 0.5 && gate.pos < 0.98) { a.pose = 'wave'; a.want = -Math.atan2(1, 0.3); } },
+      tick: (a) => { if (astropulseHQ.gate.target > 0.5 && astropulseHQ.gate.pos < 0.98) { a.pose = 'wave'; a.want = -Math.atan2(1, 0.3); } },
     });
     // 8. Courier: arrives, the gate opens, hands over a parcel at the door, leaves, the gate closes
     const courier = makePerson({ shirt: '#ff9f43', pants: '#2b2850', hair: '#241f4d', skin: '#e0a98a', hat: 'beanie', hatColor: '#ff9f43', shorts: true, shoes: '#fff8ec' });
@@ -1545,13 +1573,13 @@ export async function createWorld(opts) {
       steps: [
         { do: (a) => { a.hidden = false; a.x = -4.9; a.z = 3.55; a.carry = true; parcel.visible = true; parcelDoor.visible = false; } },
         { go: [0, 3.55] },
-        { do: () => { gate.target = 1; } }, { wait: 1.9, pose: 'idle', face: [0, -1] },
+        { do: () => { astropulseHQ.gate.target = 1; } }, { wait: 1.9, pose: 'idle', face: [0, -1] },
         { go: [0, 2.3] }, { go: [0, 1.3] },
         { wait: 2.2, pose: 'give', face: [0, -1] },
         { do: (a) => { a.carry = false; parcel.visible = false; parcelDoor.visible = true; } },
         { wait: 0.7 },
         { go: [0, 2.3] }, { go: [0, 3.55] },
-        { do: () => { gate.target = 0; } },
+        { do: () => { astropulseHQ.gate.target = 0; } },
         { go: [5.2, 3.55] },
         { do: (a) => { a.hidden = true; } }, { wait: 7 },
       ],
@@ -1566,6 +1594,56 @@ export async function createWorld(opts) {
         { go: [-2.6, 2.4] }, { wait: 4, pose: 'water', face: [-1, 0] },
         { go: [2.6, 2.4] }, { wait: 0.3, face: [1, 0] },
         { go: [2.6, 1.3] }, { wait: 4, pose: 'water', face: [1, 0] },
+      ],
+    });
+
+    /* --- HealthGIS (.site.je): same desk layout, a smaller team with its own jobs --- */
+    const H2 = hq2Group;
+    // 1. GIS engineer, mapping data at a desk
+    const gisEng = makePerson({ shirt: '#0f6b52', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', shoes: '#2b2850' });
+    makeAgent(gisEng, H2, { x: DESK_X0(0), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps('type') });
+    // 2. Clinical data analyst, charting health records
+    const analyst = makePerson({ shirt: '#2e8bff', pants: '#2b2850', hair: '#7a4a32', skin: '#f6d2b4', hairStyle: 'pony', shoes: '#fff8ec' });
+    makeAgent(analyst, H2, { x: DESK_X0(1), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps('draw') });
+    // 3. Support agent on a call with a clinic (headset)
+    const hSupport = makePerson({ shirt: '#1fbf8f', pants: '#2b2850', hair: '#8a5a44', skin: '#e0a98a', hairStyle: 'pony', shoes: '#fff8ec' });
+    addHeadset(hSupport);
+    makeAgent(hSupport, H2, { x: DESK_X0(2), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps('phone') });
+    // 4. Project lead presenting the rollout map at the whiteboard
+    const hLead = makePerson({ shirt: '#0f6b52', pants: '#2b2850', hair: '#5a3b2a', skin: '#f2c7a5', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' });
+    makeAgent(hLead, H2, { x: 3.0, z: -2.25, face: [0, 1], ground: hqGround, steps: [{ wait: Infinity, pose: 'talk' }] });
+    // 5. Field coordinator: checks every desk, clipboard in hand
+    const hMgr = makePerson({ shirt: '#fff8ec', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' });
+    box(hMgr.elbowL, 0.03, 0.22, 0.16, 0.05, -0.17, 0, '#c9966f');
+    const hMgrSteps = [];
+    [-2.6, -1.1].forEach((x) => { const sx = x - 0.75; hMgrSteps.push({ go: [sx, 0.05] }, { go: [sx, -0.7] }, { wait: 2.4, pose: 'point', face: [0, -1] }, { go: [sx, 0.05] }); });
+    hMgrSteps.push({ go: [-3.2, 0.05] });
+    makeAgent(hMgr, H2, { x: -3.2, z: 0.05, ground: hqGround, speed: 0.8, steps: hMgrSteps });
+    // 6. Gate guard, waves people through while the gate opens
+    const hGuard = makePerson({ shirt: '#0f3f30', pants: '#2b2850', hair: '#241f4d', skin: '#d9a07a', hat: 'beanie', hatColor: '#0f3f30', shoes: '#241f4d', longSleeve: true, belt: '#1fbf8f' });
+    makeAgent(hGuard, H2, {
+      x: 1.55, z: 2.15, face: [0, 1], ground: hqGround,
+      steps: [{ wait: 6, pose: 'idle', face: [0, 1] }, { go: [1.55, 1.5] }, { wait: 4, face: [0, 1] }, { go: [1.55, 2.15] }],
+      tick: (a) => { if (healthgisHQ.gate.target > 0.5 && healthgisHQ.gate.pos < 0.98) { a.pose = 'wave'; a.want = -Math.atan2(1, 0.3); } },
+    });
+    // 7. Courier: delivers a sample kit, gate opens and closes around the visit
+    const hCourier = makePerson({ shirt: '#2e8bff', pants: '#2b2850', hair: '#241f4d', skin: '#e0a98a', hat: 'beanie', hatColor: '#2e8bff', shorts: true, shoes: '#fff8ec' });
+    const hParcel = box(hCourier.upper, 0.2, 0.16, 0.26, 0.3, 0.2, 0, '#e6f7f1'); hParcel.visible = true;
+    const hParcelDoor = box(H2, 0.3, 0.22, 0.3, 0.9, 0.12, 1.05, '#e6f7f1'); hParcelDoor.visible = false;
+    makeAgent(hCourier, H2, {
+      x: -4.9, z: 3.55, face: [1, 0], ground: hqGround, speed: 1.0,
+      steps: [
+        { do: (a) => { a.hidden = false; a.x = -4.9; a.z = 3.55; a.carry = true; hParcel.visible = true; hParcelDoor.visible = false; } },
+        { go: [0, 3.55] },
+        { do: () => { healthgisHQ.gate.target = 1; } }, { wait: 1.9, pose: 'idle', face: [0, -1] },
+        { go: [0, 2.3] }, { go: [0, 1.3] },
+        { wait: 2.2, pose: 'give', face: [0, -1] },
+        { do: (a) => { a.carry = false; hParcel.visible = false; hParcelDoor.visible = true; } },
+        { wait: 0.7 },
+        { go: [0, 2.3] }, { go: [0, 3.55] },
+        { do: () => { healthgisHQ.gate.target = 0; } },
+        { go: [5.2, 3.55] },
+        { do: (a) => { a.hidden = true; } }, { wait: 7 },
       ],
     });
   });
