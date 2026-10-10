@@ -1,362 +1,356 @@
 /* =====================================================================
-   main.js — the "conductor"
+   main.js — connects the page (index.html) to the 3D world (world.js)
    ---------------------------------------------------------------------
-   • Applies your settings from config.js to the page (links, text).
-   • Runs the loading screen and starts the 3D world (world.js).
-   • Opens/closes portfolio panels and tells the camera where to fly.
-   • Wires up the menu, sound button, keyboard shortcuts and fallbacks.
-   If the 3D engine cannot load, the portfolio still works as a normal page.
+   This file was missing from the upload, which is why the loading screen
+   never finished. It does five jobs:
+     1. fills links / text from config.js
+     2. shows loading progress and starts the 3D world
+     3. builds the glowing hotspot labels and keeps them on the markers
+     4. opens / closes the content panels and moves the camera
+     5. runs the sound button
    ===================================================================== */
+
+window.__portfolioStarted = true;
 
 import { CONFIG } from './config.js';
 import { SoundEngine } from './audio.js';
+import { createWorld } from './world.js';
 
-window.__portfolioStarted = true; // tells the safety timer in index.html that this file loaded
-
-/* ------------------------------ small helpers ------------------------------ */
-const $ = (sel, root = document) => root.querySelector(sel);
+const $ = (id) => document.getElementById(id);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const body = document.body;
-const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const mobileQuery = window.matchMedia('(max-width: 760px)');
 
-const loader = $('#loader');
-const hero = $('#hero');
-const hint = $('#hint');
-const menu = $('#menu');
-const btnMenu = $('#btn-menu');
-const btnSound = $('#btn-sound');
-const toastEl = $('#toast');
+/* ------------------------------------------------------------------ */
+/* 1. links and text from config.js                                    */
+/* ------------------------------------------------------------------ */
+function fillFromConfig() {
+  const links = CONFIG.links || {};
 
-const sound = new SoundEngine();
-let world = null;
-let staticMode = false;
-let state = 'home';          // 'home' | 'explore' | 'section'
-let current = null;          // id of the open panel
-let lastOpener = null;       // element to return focus to after closing a panel
-let openToken = 0;           // cancels stale timers when the visitor clicks quickly
-let progress = 0;
-
-/* ------------------------------ toast ------------------------------ */
-let toastTimer = 0;
-function toast(msg, ms = 3400) {
-  toastEl.textContent = msg;
-  toastEl.classList.add('is-visible');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove('is-visible'), ms);
-}
-
-/* ------------------------------ apply config.js to the page ------------------------------ */
-function applyConfig() {
   $$('[data-link]').forEach((el) => {
     const key = el.dataset.link;
-    const val = String((CONFIG.links && CONFIG.links[key]) || '').trim();
-    if (val) {
-      el.setAttribute('href', key === 'email' ? `mailto:${val}` : val);
-      if (key !== 'email') { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
-      el.classList.remove('is-disabled'); el.removeAttribute('aria-disabled'); el.hidden = false;
-      const t = $('[data-link-text]', el);
-      if (t) t.textContent = key === 'email' ? val : val.replace(/^https?:\/\//, '').replace(/\/$/, '');
-      const note = $(`[data-note-for="${key}"]`); if (note) note.hidden = true;
-    } else if (el.hasAttribute('data-hide-if-empty')) {
-      el.hidden = true;
+    const raw = (links[key] || '').trim();
+    const hrefValue = key === 'email' && raw ? 'mailto:' + raw : raw;
+    const shown = raw.replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+    if (raw) {
+      el.setAttribute('href', hrefValue);
+      if (key !== 'email') { el.setAttribute('target', '_blank'); el.setAttribute('rel', 'noopener noreferrer'); }
+      el.classList.remove('is-disabled');
+      el.removeAttribute('aria-disabled');
+      el.removeAttribute('tabindex');
+      el.hidden = false;
+      const txt = el.querySelector('[data-link-text]');
+      if (txt) { txt.textContent = shown; txt.classList.remove('placeholder'); }
     } else {
-      el.removeAttribute('href'); el.classList.add('is-disabled'); el.setAttribute('aria-disabled', 'true');
+      el.removeAttribute('href');
+      el.classList.add('is-disabled');
+      el.setAttribute('aria-disabled', 'true');
+      el.setAttribute('tabindex', '-1');
+      if (el.hasAttribute('data-hide-if-empty')) el.hidden = true;
+      const txt = el.querySelector('[data-link-text]');
+      if (txt) txt.textContent = 'Not added yet';
     }
   });
+
+  // notes such as "The source code link isn't set yet" disappear once the link exists
+  $$('[data-note-for]').forEach((el) => { el.hidden = !!(links[el.dataset.noteFor] || '').trim(); });
+
   $$('[data-text]').forEach((el) => {
-    const v = String((CONFIG.text && CONFIG.text[el.dataset.text]) || '').trim();
+    const v = CONFIG.text && CONFIG.text[el.dataset.text];
     if (v) { el.textContent = v; el.classList.remove('placeholder'); }
   });
   $$('[data-year]').forEach((el) => { el.textContent = new Date().getFullYear(); });
 }
-document.addEventListener('click', (e) => {
-  const a = e.target.closest('a.is-disabled');
-  if (a) { e.preventDefault(); toast('This link is not set yet. Add it in config.js.'); }
-});
+fillFromConfig();
 
-/* ------------------------------ loading screen ------------------------------ */
-function setProgress(f, label) {
-  progress = Math.max(progress, clamp(f, 0, 1));
-  const pct = Math.round(progress * 100);
-  $('#loader-fill').style.transform = `scaleX(${progress})`;
-  $('#loader-van').style.left = `${pct}%`;
-  $('#loader-pct').textContent = `${pct}%`;
-  if (label) $('#loader-status').textContent = label;
+/* ------------------------------------------------------------------ */
+/* helpers                                                             */
+/* ------------------------------------------------------------------ */
+const params = new URLSearchParams(location.search);
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isNarrow = () => window.matchMedia('(max-width: 760px)').matches;
+
+let toastTimer = 0;
+function toast(msg, ms = 4200) {
+  const t = $('toast'); if (!t) return;
+  t.textContent = msg; t.classList.add('is-visible');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('is-visible'), ms);
 }
-function showLoaderError(message, allowSimple = true) {
-  loader.hidden = false; loader.classList.remove('is-done');
-  body.classList.add('is-loading');
-  $('#loader-error-msg').textContent = message;
-  $('#btn-simple').hidden = !allowSimple;
-  $('#loader-error').hidden = false;
-  $('#loader-status').textContent = 'Something went wrong';
-  $('#btn-retry').focus();
-}
-function finishLoading() {
-  setProgress(1, 'Ready');
-  loader.classList.add('is-done');
-  body.classList.remove('is-loading');
-  setTimeout(() => { loader.hidden = true; }, reduced ? 50 : 900);
-}
-function withTimeout(promise, ms, message) {
-  let t;
-  const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error(message)), ms); });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
-}
-function hasWebGL() {
+
+function webglAvailable() {
   try {
     const c = document.createElement('canvas');
     return !!(window.WebGLRenderingContext && (c.getContext('webgl2') || c.getContext('webgl')));
   } catch (e) { return false; }
 }
 
-/* ------------------------------ plain-page fallback ------------------------------ */
-function goStatic(reason) {
-  staticMode = true;
-  if (world) { try { world.dispose(); } catch (e) { /* ignore */ } world = null; }
-  body.classList.remove('mode-3d', 'is-loading', 'menu-open');
-  loader.hidden = true;
-  const note = $('#static-note');
-  if (note && reason) { note.textContent = reason; note.hidden = false; }
-  window.scrollTo(0, 0);
+function goStatic(note) {
+  body.classList.remove('mode-3d', 'is-loading');
+  body.removeAttribute('data-view');
+  $('loader').hidden = true;
+  const n = $('static-note');
+  if (n && note) { n.textContent = note; n.hidden = false; }
+  $$('.hero').forEach((h) => h.classList.add('is-in'));
 }
 
-/* ------------------------------ camera / layout helpers ------------------------------ */
-function homeShift() { return mobileQuery.matches ? { x: 0, y: 0.13 } : { x: -0.12, y: 0 }; }
-function panelShift(id) {
-  if (mobileQuery.matches) {
-    const el = $(`#panel-${id}`);
-    const h = Math.min(el ? el.offsetHeight : window.innerHeight * 0.5, window.innerHeight * 0.62);
-    return { x: 0, y: clamp(h / 2 / window.innerHeight, 0, 0.32) };
-  }
-  const w = Math.min(520, window.innerWidth - 40) + 20;
-  return { x: (w / 2) / window.innerWidth, y: 0 };
-}
-function applyShift(s, duration) { if (world) world.setViewShift(s.x, s.y, duration); }
-
-/* ------------------------------ states: home / explore / section ------------------------------ */
-function closePanelsNow() { $$('.panel.is-open').forEach((p) => p.classList.remove('is-open')); }
-
-function enterHome() {
-  if (!world) return;
-  openToken++; closePanelsNow(); current = null; state = 'home'; body.dataset.view = 'home';
-  hero.classList.add('is-in');
-  world.setAutoRotate(true);
-  world.flyTo('home');
-  applyShift(homeShift(), 1.4);
-  sound.whoosh();
-}
-function enterExplore() {
-  if (!world) return;
-  openToken++; closePanelsNow(); current = null; state = 'explore'; body.dataset.view = 'explore';
-  hint.classList.add('is-visible');
-  world.setAutoRotate(false);
-  world.flyTo('explore');
-  applyShift({ x: 0, y: 0 }, 1.2);
-  sound.whoosh();
-}
-function openSection(id, opener) {
-  const panel = $(`#panel-${id}`);
-  if (!panel) return;
-  if (staticMode || !world) { panel.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' }); closeMenu(); return; }
-  closeMenu();
-  if (id === current) return;
-  lastOpener = opener || document.activeElement;
-  const token = ++openToken;
-  closePanelsNow();
-  current = id; state = 'section'; body.dataset.view = 'section';
-  hideHint();
-  world.setAutoRotate(false);
-  world.flyTo(id);                      // camera + target fly together (GSAP timeline in world.js)
-  applyShift(panelShift(id), 1.4);
-  sound.whoosh(); sound.open();
-  setTimeout(() => {
-    if (token !== openToken) return;    // visitor already clicked something else
-    panel.classList.add('is-open');
-    panel.scrollTop = 0;
-    setTimeout(() => { if (token === openToken) panel.focus({ preventScroll: true }); }, reduced ? 0 : 450);
-  }, reduced ? 0 : 650);
-}
-function closeSection() {
-  if (state !== 'section') return;
-  const opener = lastOpener;
-  enterExplore();
-  sound.close();
-  if (opener && document.contains(opener) && opener.offsetParent !== null) opener.focus({ preventScroll: true });
-}
-function resetView() {
-  if (!world) return;
-  if (state === 'section') closeSection();
-  else { world.flyTo(state === 'home' ? 'home' : 'explore'); sound.tick(); }
-}
-function hideHint() { hint.classList.remove('is-visible'); }
-
-/* ------------------------------ hotspot labels (HTML on top of the 3D markers) ------------------------------ */
-const hotspotEls = {};
-function buildHotspots() {
-  const wrap = $('#hotspots');
-  wrap.textContent = '';
-  (CONFIG.hotspots || []).forEach((h) => {
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'hotspot'; b.dataset.id = h.id;
-    b.setAttribute('aria-label', `${h.label}. ${h.preview}`);
-    const chip = document.createElement('span'); chip.className = 'hotspot-chip'; chip.textContent = h.label;
-    const prev = document.createElement('span'); prev.className = 'hotspot-preview'; prev.setAttribute('aria-hidden', 'true'); prev.textContent = h.preview;
-    b.append(prev, chip);
-    b.addEventListener('click', () => openSection(h.id, b));
-    const on = () => { if (world) world.setHover(h.id); };
-    const off = () => { if (world) world.setHover(null); };
-    b.addEventListener('mouseenter', on); b.addEventListener('mouseleave', off);
-    b.addEventListener('focus', on); b.addEventListener('blur', off);
-    wrap.appendChild(b); hotspotEls[h.id] = b;
-  });
-}
-function updateHotspotLabels(screens) {
-  if (state !== 'explore') return;
-  for (const s of screens) {
-    const el = hotspotEls[s.id]; if (!el) continue;
-    el.classList.toggle('is-offscreen', !s.visible);
-    el.style.transform = `translate3d(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px, 0)`;
-  }
-}
-function highlightHotspot(id) {
-  Object.keys(hotspotEls).forEach((k) => hotspotEls[k].classList.toggle('is-hover', k === id));
-  if (id) sound.tick();
+function showLoadError(message) {
+  $('loader-status').textContent = 'Something went wrong';
+  $('loader-error-msg').textContent = message;
+  $('loader-error').hidden = false;
+  $('btn-retry').onclick = () => location.reload();
+  $('btn-simple').onclick = () => { params.set('quality', 'simple'); location.search = params.toString(); };
+  $('btn-static').onclick = () => goStatic('Showing the text version of this portfolio.');
 }
 
-/* ------------------------------ menu ------------------------------ */
-function openMenu() {
-  menu.classList.add('is-open'); body.classList.add('menu-open');
-  btnMenu.setAttribute('aria-expanded', 'true');
-  const first = $('a', menu); if (first) first.focus({ preventScroll: true });
-  sound.tick();
-}
-function closeMenu() {
-  if (!menu.classList.contains('is-open')) return;
-  menu.classList.remove('is-open'); body.classList.remove('menu-open');
-  btnMenu.setAttribute('aria-expanded', 'false');
-}
-btnMenu.addEventListener('click', () => (menu.classList.contains('is-open') ? (closeMenu(), btnMenu.focus()) : openMenu()));
-$$('[data-go]', menu).forEach((a) => {
-  a.addEventListener('click', (e) => {
-    if (staticMode || !world) return;            // plain page: let the #anchor scroll normally
-    e.preventDefault();
-    const id = a.dataset.go;
-    if (id === 'home') { closeMenu(); enterHome(); } else openSection(id, btnMenu);
-  });
-});
-document.addEventListener('click', (e) => {
-  if (menu.classList.contains('is-open') && !menu.contains(e.target) && !btnMenu.contains(e.target)) closeMenu();
-});
+/* ------------------------------------------------------------------ */
+/* 2. start                                                            */
+/* ------------------------------------------------------------------ */
+const sound = new SoundEngine();
+let world = null;
+let currentView = 'home';          // home | explore | <section id>
+let lastBase = 'home';             // where "close" returns to
 
-/* ------------------------------ buttons ------------------------------ */
-$('#brand-btn').addEventListener('click', () => { if (staticMode || !world) { window.scrollTo({ top: 0, behavior: reduced ? 'auto' : 'smooth' }); } else enterHome(); });
-$('#btn-explore').addEventListener('click', () => { if (world) enterExplore(); });
-$('#btn-reset').addEventListener('click', resetView);
-$$('[data-close]').forEach((b) => b.addEventListener('click', closeSection));
-
-function updateSoundButton(on) {
-  btnSound.setAttribute('aria-pressed', String(on));
-  $('.btn-label', btnSound).textContent = on ? 'Sound on' : 'Sound off';
+function setProgress(fraction, label) {
+  const f = Math.max(0, Math.min(1, fraction));
+  const fill = $('loader-fill'), van = $('loader-van');
+  if (fill) fill.style.transform = `scaleX(${f})`;
+  if (van) van.style.left = `${f * 100}%`;
+  $('loader-pct').textContent = Math.round(f * 100) + '%';
+  if (label) $('loader-status').textContent = label;
 }
-btnSound.addEventListener('click', async () => {
-  if (sound.enabled) { sound.disable(); updateSoundButton(false); toast('Sound off'); return; }
-  const ok = await sound.enable();          // runs inside the click, so browsers allow it
-  updateSoundButton(ok);
-  if (ok) { sound.tick(); toast('Sound on. Use the button again to mute.'); }
-  else toast('Your browser blocked audio. Tap the sound button once more to allow it.');
-});
 
-/* ------------------------------ keyboard ------------------------------ */
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    if (menu.classList.contains('is-open')) { closeMenu(); btnMenu.focus(); }
-    else if (state === 'section') closeSection();
+async function boot() {
+  if (!webglAvailable()) {
+    goStatic('Your browser could not start 3D graphics, so this is the text version of the portfolio.');
     return;
   }
-  if (!world || staticMode) return;
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.target.closest && e.target.closest('input, textarea, select, .panel, #menu')) return;
-  const step = 0.14;
-  const map = { ArrowLeft: [-step, 0, 1], ArrowRight: [step, 0, 1], ArrowUp: [0, -0.08, 1], ArrowDown: [0, 0.08, 1], '+': [0, 0, 0.88], '=': [0, 0, 0.88], '-': [0, 0, 1.14], '_': [0, 0, 1.14] };
-  const m = map[e.key];
-  if (m) { e.preventDefault(); world.nudge(m[0], m[1], m[2]); }
-});
+  if (!window.gsap) console.info('GSAP did not load. The built-in camera tween is used instead.');
 
-/* keep the view shift correct when the window changes size */
-let resizeTimer = 0;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => {
-    if (!world) return;
-    if (state === 'section' && current) applyShift(panelShift(current), 0.3);
-    else if (state === 'home') applyShift(homeShift(), 0.3);
-  }, 150);
-});
-
-/* ------------------------------ buttons inside the loader error box ------------------------------ */
-$('#btn-retry').addEventListener('click', () => location.reload());
-$('#btn-simple').addEventListener('click', () => { $('#loader-error').hidden = true; progress = 0; boot('simple'); });
-$('#btn-static').addEventListener('click', () => goStatic('You are viewing the text version of this portfolio.'));
-
-/* ------------------------------ boot ------------------------------ */
-function freshCanvas() {
-  const old = $('#scene');
-  const next = old.cloneNode(false);
-  old.replaceWith(next);
-  return next;
-}
-
-async function boot(quality = 'full') {
-  $('#loader-error').hidden = true;
-  setProgress(0.03, 'Starting up');
-
-  if (!hasWebGL()) {
-    goStatic('Your browser or device does not support WebGL, so this is the text version of the portfolio.');
-    return;
-  }
+  const quality = params.get('quality') === 'simple' ? 'simple' : 'full';
 
   try {
-    setProgress(0.08, 'Loading the 3D engine');
-    const mod = await withTimeout(import('./world.js'), 30000, 'The 3D engine took too long to download. Check your connection.');
-    const canvas = quality === 'simple' ? freshCanvas() : $('#scene');
-    setProgress(0.2, 'Building the world');
-
-    world = await mod.createWorld({
-      canvas, config: CONFIG, quality, reducedMotion: reduced,
-      onProgress: (f, label) => setProgress(0.2 + f * 0.78, label),
-      onHotspotHover: highlightHotspot,
-      onHotspotClick: (id) => openSection(id, null),
-      onFrame: updateHotspotLabels,
-      onUserInteract: hideHint,
-      onWarning: (msg) => toast(msg, 5000),
+    world = await createWorld({
+      canvas: $('scene'),
+      config: CONFIG,
+      quality,
+      reducedMotion,
+      onProgress: setProgress,
+      onHotspotHover: (id) => { setLabelHover(id); if (id) sound.tick(); },
+      onHotspotClick: (id) => openSection(id),
+      onFrame: updateLabels,
+      onUserInteract: () => hideHint(),
+      onWarning: (msg) => toast(msg),
       onError: (err) => {
         console.error(err);
-        showLoaderError('The 3D view stopped working (' + (err && err.message ? err.message : 'unknown error') + '). You can reload or continue with the text version.', quality === 'full');
+        if (world) { try { world.dispose(); } catch (e) { /* ignore */ } }
+        body.classList.add('is-loading');
+        $('loader').classList.remove('is-done');
+        showLoadError('The 3D world stopped working: ' + (err && err.message ? err.message : 'unknown error') + '.');
       },
     });
-
-    buildHotspots();
-    state = 'home'; body.dataset.view = 'home';
-    applyShift(homeShift(), 0);
-    world.setAutoRotate(true);
-    world.start();
-    finishLoading();
-    world.playIntro();
-    setTimeout(() => hero.classList.add('is-in'), reduced ? 0 : 1500);
   } catch (err) {
-    console.error('3D start-up failed:', err);
-    world = null;
-    const msg = quality === 'simple'
-      ? 'The simplified 3D scene could not start either. You can try again or continue with the text version.'
-      : 'The 3D world could not start. A library may be blocked or your device may not support it. You can retry, try a simpler scene, or continue with the text version.';
-    showLoaderError(msg, quality === 'full');
+    console.error(err);
+    showLoadError('The 3D world could not start: ' + (err && err.message ? err.message : 'unknown error') + '.');
+    return;
+  }
+
+  buildLabels();
+  setProgress(1, 'Ready');
+  world.start();
+
+  // Reveal: loader fades, camera swoops in, hero text appears.
+  setTimeout(() => {
+    $('loader').classList.add('is-done');
+    body.classList.remove('is-loading');
+    world.playIntro();
+    world.setAutoRotate(true);
+    world.setViewShift(...homeShift(), reducedMotion ? 0 : 3);
+    setTimeout(() => $$('.hero').forEach((h) => h.classList.add('is-in')), reducedMotion ? 0 : 900);
+  }, 250);
+}
+
+/* ------------------------------------------------------------------ */
+/* 3. hotspot labels (HTML) that follow the glowing markers (3D)       */
+/* ------------------------------------------------------------------ */
+const labels = new Map();
+
+function buildLabels() {
+  const host = $('hotspots'); host.innerHTML = '';
+  (CONFIG.hotspots || []).forEach((h) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'hotspot is-offscreen'; b.dataset.id = h.id;
+    b.style.setProperty('--c', h.color || '#ff6b5e');
+    b.setAttribute('aria-label', `${h.label}. ${h.preview || ''}`);
+    b.innerHTML = '<span class="hotspot-chip"></span><span class="hotspot-preview"></span>';
+    b.querySelector('.hotspot-chip').append(document.createTextNode(h.label));
+    b.querySelector('.hotspot-preview').textContent = h.preview || '';
+    b.addEventListener('click', () => openSection(h.id));
+    b.addEventListener('pointerenter', () => { if (world) world.setHover(h.id); });
+    b.addEventListener('pointerleave', () => { if (world) world.setHover(null); });
+    b.addEventListener('focus', () => { if (world) world.setHover(h.id); });
+    b.addEventListener('blur', () => { if (world) world.setHover(null); });
+    host.appendChild(b);
+    labels.set(h.id, b);
+  });
+}
+
+function updateLabels(screens) {
+  const placed = [];
+  const list = screens.filter((s) => s.visible).sort((a, b) => a.y - b.y);
+  for (const s of screens) {
+    const el = labels.get(s.id); if (!el) continue;
+    el.classList.toggle('is-offscreen', !s.visible);
+  }
+  for (const s of list) {
+    const el = labels.get(s.id); if (!el) continue;
+    const w = (el.firstChild ? el.firstChild.offsetWidth : 120) || 120;
+    let dy = 0;
+    // push a label's text chip down until it no longer covers a neighbour
+    for (let tries = 0; tries < 6; tries++) {
+      const hit = placed.find((p) => Math.abs(p.x - s.x) < (p.w + w) / 2 + 4 && Math.abs(p.y - (s.y + dy)) < 36);
+      if (!hit) break;
+      dy = hit.y + 38 - s.y;
+    }
+    placed.push({ x: s.x, y: s.y + dy, w });
+    el.style.setProperty('--dy', dy.toFixed(0) + 'px');
+    el.style.transform = `translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px)`;
+    el.style.zIndex = String(Math.round(s.y));
   }
 }
 
-/* ------------------------------ go! ------------------------------ */
-applyConfig();
-updateSoundButton(false);
-boot('full');
+function setLabelHover(id) {
+  labels.forEach((el, key) => { el.classList.toggle('is-hover', key === id); if (key === id) el.style.zIndex = '9999'; });
+}
+
+/* ------------------------------------------------------------------ */
+/* 4. views, panels, menu                                              */
+/* ------------------------------------------------------------------ */
+const hint = $('hint');
+let hintTimer = 0;
+function showHint() {
+  if (!hint) return;
+  hint.classList.add('is-visible');
+  clearTimeout(hintTimer); hintTimer = setTimeout(hideHint, 7000);
+}
+function hideHint() { if (hint) hint.classList.remove('is-visible'); clearTimeout(hintTimer); }
+
+function setView(view) {
+  currentView = view;
+  const mode = view === 'home' ? 'home' : view === 'explore' ? 'explore' : 'section';
+  body.dataset.view = mode;
+}
+
+function closePanels() {
+  $$('.panel.is-open').forEach((p) => p.classList.remove('is-open'));
+  if (world) world.setViewShift(0, 0, 0.9);
+}
+
+// On the home screen the text sits on the left (desktop) or bottom (phone), so slide the world the other way.
+const homeShift = () => (isNarrow() ? [0, 0.1] : [-0.11, 0]);
+
+function goHome() {
+  closeMenu(); closePanels(); hideHint();
+  setView('home'); lastBase = 'home';
+  if (world) { world.flyTo('home'); world.setAutoRotate(true); world.setViewShift(...homeShift(), 1.2); }
+  sound.whoosh();
+}
+
+function goExplore() {
+  closeMenu(); closePanels();
+  setView('explore'); lastBase = 'explore';
+  if (world) { world.flyTo('explore'); world.setAutoRotate(false); }
+  showHint();
+}
+
+const TOUR_TIPS = {
+  about: 'Double-click empty space to hear the next sentence.',
+  astropulse: 'Double-click empty space to meet the team, one by one.',
+  nexora: 'Double-click empty space to meet the team, one by one.',
+  healthgis: 'Double-click empty space to meet the team, one by one.',
+};
+const tipsShown = new Set();
+
+function openSection(id) {
+  if (!world) return;
+  const panel = $('panel-' + id);
+  closeMenu(); hideHint();
+  if (currentView === 'home' || currentView === 'explore') lastBase = currentView;
+  setView(id);
+  world.setAutoRotate(false);
+  world.flyTo(id);
+  $$('.panel.is-open').forEach((p) => { if (p !== panel) p.classList.remove('is-open'); });
+  if (panel) {
+    panel.classList.add('is-open');
+    panel.scrollTop = 0;
+    setTimeout(() => { try { panel.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }, 450);
+    // keep the scene visible beside (desktop) or above (phone) the panel
+    world.setViewShift(isNarrow() ? 0 : 0.13, isNarrow() ? 0.17 : 0, 1.2);
+  }
+  sound.whoosh(); sound.open();
+  if (TOUR_TIPS[id] && !tipsShown.has(id)) { tipsShown.add(id); setTimeout(() => toast(TOUR_TIPS[id], 5200), 2200); }
+}
+
+function closeSection() {
+  sound.close();
+  closePanels();
+  if (lastBase === 'home') goHome(); else goExplore();
+}
+
+/* menu */
+const menu = $('menu'), menuBtn = $('btn-menu');
+function openMenu() { menu.classList.add('is-open'); menuBtn.setAttribute('aria-expanded', 'true'); }
+function closeMenu() { menu.classList.remove('is-open'); menuBtn.setAttribute('aria-expanded', 'false'); }
+menuBtn.addEventListener('click', (e) => { e.stopPropagation(); menu.classList.contains('is-open') ? closeMenu() : openMenu(); });
+document.addEventListener('click', (e) => { if (!menu.contains(e.target) && e.target !== menuBtn) closeMenu(); });
+
+$$('#menu a[data-go]').forEach((a) => {
+  a.addEventListener('click', (e) => {
+    if (!body.classList.contains('mode-3d')) return;      // plain page: normal anchor scrolling
+    e.preventDefault();
+    const go = a.dataset.go;
+    if (go === 'home') goHome(); else openSection(go);
+  });
+});
+
+/* buttons */
+$('btn-explore').addEventListener('click', () => { sound.whoosh(); goExplore(); });
+$('brand-btn').addEventListener('click', () => { if (body.classList.contains('mode-3d')) goHome(); else window.scrollTo({ top: 0, behavior: 'smooth' }); });
+$('btn-reset').addEventListener('click', () => { if (currentView === 'home') goHome(); else if (lastBase === 'home' && currentView === 'explore') goHome(); else goExplore(); });
+$$('[data-close]').forEach((b) => b.addEventListener('click', closeSection));
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (menu.classList.contains('is-open')) { closeMenu(); menuBtn.focus(); return; }
+    if (currentView !== 'home' && currentView !== 'explore') closeSection();
+    else if (currentView === 'explore') goHome();
+  }
+  if ((e.key === 'ArrowRight' || e.key === ' ') && world && body.dataset.view === 'section' && document.activeElement === document.body) {
+    if (e.key === ' ') e.preventDefault();
+    world.next();
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* 5. sound                                                            */
+/* ------------------------------------------------------------------ */
+const soundBtn = $('btn-sound');
+soundBtn.addEventListener('click', async () => {
+  const on = soundBtn.getAttribute('aria-pressed') === 'true';
+  if (on) {
+    sound.disable();
+    soundBtn.setAttribute('aria-pressed', 'false');
+    soundBtn.querySelector('.btn-label').textContent = 'Sound off';
+  } else {
+    const ok = await sound.enable();            // must run inside this click
+    if (ok) {
+      soundBtn.setAttribute('aria-pressed', 'true');
+      soundBtn.querySelector('.btn-label').textContent = 'Sound on';
+      sound.open();
+    } else {
+      toast('Your browser did not allow sound. The site works silently.');
+    }
+  }
+});
+
+/* ------------------------------------------------------------------ */
+boot();

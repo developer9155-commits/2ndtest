@@ -7,7 +7,7 @@
   <meta name="description" content="Portfolio of Murari Kumar, a Diploma CSE student building web, Android and AI-powered products. Explore it as an interactive 3D world.">
   <meta name="theme-color" content="#4f9bff">
   <meta property="og:title" content="Murari Kumar — Student Developer &amp; AI Product Builder">
-  <meta property="og:description" content="An interactive 3D portfolio: explore a floating island with a city, a camper van and an office to see my skills and projects.">
+  <meta property="og:description" content="An interactive 3D portfolio: explore a tiny floating world to see my skills and projects.">
   <meta property="og:type" content="website">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%234f9bff'/%3E%3Cpath d='M8 50 L26 22 L38 40 L46 30 L58 50Z' fill='%236c58cf'/%3E%3Ccircle cx='46' cy='16' r='6' fill='%23ffe08a'/%3E%3C/svg%3E">
 
@@ -66,7 +66,7 @@
 
   <!-- ============================ 3D STAGE ============================ -->
   <div class="stage" id="stage">
-    <canvas id="scene" aria-label="Interactive 3D miniature world with a village, a farm and a city. Drag to look around. Use the menu or the glowing markers to open portfolio sections." role="img"></canvas>
+    <canvas id="scene" aria-label="Interactive 3D miniature world. Drag to look around. Use the menu or the glowing markers to open portfolio sections." role="img"></canvas>
   </div>
 
   <!-- ============================ TOP BAR ============================ -->
@@ -99,8 +99,9 @@
       <li><a href="#panel-about" data-go="about">About me</a></li>
       <li><a href="#panel-skills" data-go="skills">Skills</a></li>
       <li><a href="#panel-nexora" data-go="nexora">Nexora AI</a></li>
-      <li><a href="#panel-crop" data-go="crop">CropIndia AI</a></li>
       <li><a href="#panel-astropulse" data-go="astropulse">Astropulse SMM</a></li>
+      <li><a href="#panel-healthgis" data-go="healthgis">HealthGIS</a></li>
+      <li><a href="#panel-crop" data-go="crop">CropIndia AI</a></li>
       <li><a href="#panel-education" data-go="education">Education</a></li>
       <li><a href="#panel-contact" data-go="contact">Contact</a></li>
     </ul>
@@ -135,7 +136,6 @@
           <li>Building responsive websites and web apps with HTML, CSS, JavaScript and React.</li>
           <li>Creating Android applications with Java.</li>
           <li>Adding AI features to products, like the website generator in Nexora AI.</li>
-          <li>Building worlds like this one: a tiny island with a village, a city, people with jobs and an office you can explore.</li>
         </ul>
         <h3>What I'm looking for</h3>
         <p>Chances to work with other developers, learn from real projects and build products that help people. If that sounds like your team or your idea, say hello in the contact section.</p>
@@ -205,6 +205,60 @@
         <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
       </article>
 
+      <!-- ASTROPULSE SMM -->
+      <article class="panel" id="panel-astropulse" tabindex="-1" aria-labelledby="t-astropulse">
+        <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
+        <p class="badge badge-pink">Company</p>
+        <h2 id="t-astropulse">Astropulse SMM</h2>
+        <p class="lead">A social media marketing agency. I work with a team of nine specialists who plan, design and run campaigns for clients.</p>
+        <h3>What the agency does</h3>
+        <ul class="plain">
+          <li>Content planning and calendars.</li>
+          <li>Graphic design for posts, reels and brand visuals.</li>
+          <li>Paid ad campaigns and daily community management.</li>
+          <li>Client reporting and growth tracking.</li>
+        </ul>
+        <h3>The team of nine</h3>
+        <ul class="team-list">
+          <li><strong>Content Strategist</strong> plans the content calendar.</li>
+          <li><strong>Social Media Manager</strong> schedules posts and replies to audiences.</li>
+          <li><strong>Graphic Designer</strong> makes posters, reels and brand visuals.</li>
+          <li><strong>Client Support Executive</strong> is the first point of contact for clients.</li>
+          <li><strong>Team Lead</strong> keeps deadlines on track.</li>
+          <li><strong>Strategy Lead</strong> presents ideas and monthly results.</li>
+          <li><strong>Security Officer</strong> looks after the gate and visitors.</li>
+          <li><strong>Delivery Executive</strong> brings parcels and documents.</li>
+          <li><strong>Facility Keeper</strong> looks after the office garden.</li>
+        </ul>
+        <p class="note">In the 3D world, double-click empty space to meet each person.</p>
+        <p class="panel-actions">
+          <a class="btn btn-primary" data-link="astropulseLive">Visit the website</a>
+        </p>
+        <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
+      </article>
+
+      <!-- HEALTHGIS -->
+      <article class="panel" id="panel-healthgis" tabindex="-1" aria-labelledby="t-healthgis">
+        <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
+        <p class="badge">Concept in development</p>
+        <h2 id="t-healthgis">HealthGIS</h2>
+        <p class="lead">A mapping platform that brings health information onto interactive maps.</p>
+        <h3>The idea</h3>
+        <p>Health numbers are easier to understand when you can see where they happen. HealthGIS puts data on maps and dashboards, so patterns by area become easy to spot and decisions become clearer.</p>
+        <h3>Planned capabilities</h3>
+        <ul class="plain">
+          <li>Map layers that show health information by location.</li>
+          <li>Clear charts and dashboards anyone can read.</li>
+          <li>Verified data coordinated with partner organisations.</li>
+        </ul>
+        <p class="note">This section describes the plan, not a finished product.</p>
+        <p class="panel-actions">
+          <a class="btn btn-primary" data-link="healthgisLive">Live demo</a>
+        </p>
+        <p class="note" data-note-for="healthgisLive">No demo yet. The link will appear here once the project is online.</p>
+        <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
+      </article>
+
       <!-- CROPINDIA AI -->
       <article class="panel" id="panel-crop" tabindex="-1" aria-labelledby="t-crop">
         <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
@@ -225,35 +279,6 @@
           <a class="btn btn-ghost" data-link="cropRepo">View source code</a>
         </p>
         <p class="note" data-note-for="cropLive">No demo yet. The link will appear here once the project is online.</p>
-        <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
-      </article>
-
-      <!-- ASTROPULSE SMM -->
-      <article class="panel" id="panel-astropulse" tabindex="-1" aria-labelledby="t-astropulse">
-        <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
-        <p class="badge badge-pink">Featured project</p>
-        <h2 id="t-astropulse">Astropulse SMM</h2>
-        <p class="lead">A social media marketing brand, shown in the world as a glass-front office on the city's main avenue.</p>
-        <h3>Overview</h3>
-        <p>Astropulse SMM is the pink building with the glowing orb and pulse rings on top. Look for the sliding gate and the guard booth at the entrance.</p>
-        <p class="note">Placeholder text. Replace this overview with what Astropulse SMM really offers.</p>
-        <h3>The team in the world</h3>
-        <p>Nine people work in and around the office. Each one has a job you can watch:</p>
-        <ul class="team-list">
-          <li><strong>Developer</strong> types at a desk.</li>
-          <li><strong>Social media manager</strong> types at a desk.</li>
-          <li><strong>Designer</strong> draws at a desk.</li>
-          <li><strong>Support agent</strong> takes calls with a headset.</li>
-          <li><strong>Operations manager</strong> walks the floor with a clipboard.</li>
-          <li><strong>Team lead</strong> presents the plan at the whiteboard.</li>
-          <li><strong>Security guard</strong> watches the gate and waves visitors in.</li>
-          <li><strong>Courier</strong> arrives, the gate opens, and a parcel is handed over.</li>
-          <li><strong>Gardener</strong> waters the courtyard plants.</li>
-        </ul>
-        <p class="panel-actions">
-          <a class="btn btn-primary" data-link="astropulseLive">Visit Astropulse SMM</a>
-        </p>
-        <p class="note" data-note-for="astropulseLive">The link isn't set yet. Add it in config.js.</p>
         <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
       </article>
 

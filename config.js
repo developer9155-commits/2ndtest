@@ -133,7 +133,7 @@ export const CONFIG = {
   },
 
   views: {
-    home:      { position: [20, 9, 30],   target: [0, 2, 6] },
+    home:      { position: [20, 12, 30],  target: [0, 2, 6] },
     explore:   { position: [22, 26, 38],  target: [0, 1, 9] },
     education: { position: [-4.4, 4.4, 5.4], target: [-9.4, 1.0, -1.2] },
   },
