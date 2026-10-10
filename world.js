@@ -5,32 +5,19 @@
      start(), playIntro(), flyTo(id), setHover(id), setViewShift(x, y, s),
      setAutoRotate(on), nudge(dx, dy, zoom), dispose()
 
-   NEW in this version
-     • The island is much bigger (ISLAND_RADIUS) and has a small CITY on its
-       south side: an avenue, houses, towers, a cafe, a park and cars.
-     • ASTROPULSE SMM office: a glass-front office with a sliding gate,
-       a guard booth and 9 employees, each with a specific job.
-     • "Jobs" for the people: a small routine system (see "AGENTS" below).
-         - villager walks to the mailbox and comes back home through the door
-         - city residents leave their houses, walk, and go back inside
-         - the cyclist rides, FALLS DOWN, gets up, dusts off and rides on
-         - the farmer hoes his crop beds, row after row
-         - the storyteller by the fire moves BOTH hands while talking
+   THIS VERSION
+     • Bigger island (ISLAND_RADIUS 46, WORLD_SCALE 1.5) with a mountain ring.
+     • NEW west district (towers, avenue, fountain, cars), a lake with a pier
+       and rowboat, a lighthouse with a sweeping beam.
+     • NEW sky life: rainbow, hot-air balloon, floating islets, more clouds.
+     • Fixes: each office now animates only its own screens, and every office
+       pulses in its own brand colour. Camera framing re-tuned for the size.
 
    File map (search for these headings):
-     0. helpers          small math / random / animation helpers
-     1. renderer         the WebGL renderer, scene, camera, controls
-     2. sky + lights     background gradient, sun, shadows
-     3. terrain          island, purple hills, roads
-     4. nature           pine + blossom trees, bushes, rocks, flowers, pond
-     5. landmarks        camp, tower, farm, signpost, mailbox, school
-     6. city             avenue, houses, towers, cafe, cars, park
-     7. astropulse       the SMM office, gate and courtyard
-     8. people (AGENTS)  everybody with a job
-     9. atmosphere       clouds, floating rocks, sparkles, birds, butterflies
-    10. hotspots         glowing markers + click / hover detection
-    11. camera           GSAP flights between places, limits, view shift
-    12. loop             the animation loop and clean-up
+     0. helpers   1. renderer   2. sky + lights   3. terrain   4. nature
+     5. landmarks 6. city       6.5 airport  6.6 railway   7. offices
+     8. people    8.5 district / lake / lighthouse   8.6 sky life
+     9. atmosphere  10. hotspots  11. camera  12. loop
    ===================================================================== */
 
 import * as THREE from 'three';
@@ -40,9 +27,10 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 /* ------------------------------------------------------------------ */
 /* SIZE SETTINGS — change these to make the world bigger or smaller    */
 /* ------------------------------------------------------------------ */
-const WORLD_SCALE = 1.35;    // how much bigger everything is (1 = original size)
-const CAMERA_SCALE = 1.2;    // how far back the home / explore camera sits
-const ISLAND_RADIUS = 30;    // the island used to be 14 wide from centre to edge; now it has room for a city
+const WORLD_SCALE = 1.5;     // how much bigger everything is (1 = original size)
+const CAMERA_SCALE = 1.35;   // how far back the HOME camera sits
+const EXPLORE_SCALE = 2.1;   // how far back the EXPLORE camera sits (sees the whole island)
+const ISLAND_RADIUS = 46;    // centre-to-edge size of the island
 
 /* ------------------------------------------------------------------ */
 /* 0. helpers                                                          */
@@ -53,7 +41,6 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const smoothstep = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
 const easeOut = (x) => 1 - Math.pow(1 - clamp(x, 0, 1), 3);
 
-// A seeded random generator: the world looks the same every time it loads.
 function mulberry32(seed) {
   let a = seed >>> 0;
   return function () {
@@ -63,20 +50,18 @@ function mulberry32(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-// A repeatable pseudo-random number for any (x, y, z): used for terrain jitter and noise.
 function hash3(x, y, z) {
   let h = Math.imul(Math.round(x * 1000) | 0, 374761393) ^ Math.imul(Math.round(y * 1000) | 0, 668265263) ^ Math.imul(Math.round(z * 1000) | 0, 1274126177);
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   h ^= h >>> 16;
   return (h >>> 0) / 4294967296;
 }
-function vnoise(x, z) {                           // smooth 2D value noise, result 0..1
+function vnoise(x, z) {
   const ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz;
   const u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
   const a = hash3(ix, 0.5, iz), b = hash3(ix + 1, 0.5, iz), c = hash3(ix, 0.5, iz + 1), d = hash3(ix + 1, 0.5, iz + 1);
   return lerp(lerp(a, b, u), lerp(c, d, u), v);
 }
-// Give every vertex of a geometry one colour (so several parts can be merged into one mesh).
 function paintGeo(g, hex) {
   const c = new THREE.Color(hex), arr = new Float32Array(g.attributes.position.count * 3);
   for (let i = 0; i < g.attributes.position.count; i++) c.toArray(arr, i * 3);
@@ -84,9 +69,7 @@ function paintGeo(g, hex) {
   return g;
 }
 
-/* ---- tiny animation layer -------------------------------------------
-   Uses GSAP when it loaded. If the GSAP file was blocked, a built-in
-   fallback tween does the same job, so camera moves still work.        */
+/* ---- tiny animation layer (GSAP when loaded, built-in fallback otherwise) ---- */
 const fallbackTweens = new Set();
 
 function easeByName(name) {
@@ -122,7 +105,6 @@ function stepFallbackTweens(dt) {
   }
 }
 
-// A timeline: several tweens that run together. kill() stops them all.
 class Timeline {
   constructor(onComplete) {
     this.onComplete = onComplete; this.killed = false; this.pending = 0; this.tweens = [];
@@ -165,7 +147,7 @@ export async function createWorld(opts) {
   const animate = !reducedMotion;
   const cleanups = [];
   const listen = (target, type, fn, o) => { target.addEventListener(type, fn, o); cleanups.push(() => target.removeEventListener(type, fn, o)); };
-  const pause = () => new Promise((r) => setTimeout(r, 16));       // lets the loading bar repaint between steps
+  const pause = () => new Promise((r) => setTimeout(r, 16));
   async function stage(fraction, label, fn) { onProgress(fraction, label); await pause(); fn(); }
 
   let disposed = false, failed = false, dirty = true, rafId = 0;
@@ -182,19 +164,17 @@ export async function createWorld(opts) {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0xcfe6ff, 130, 340);
+  scene.fog = new THREE.Fog(0xcfe6ff, 190, 480);
 
-  // Everything that belongs to the island lives inside W, which is scaled up.
   const W = new THREE.Group();
   W.scale.setScalar(S);
   scene.add(W);
 
-  const camera = new THREE.PerspectiveCamera(38, 1, 0.5, 1000);
+  const camera = new THREE.PerspectiveCamera(38, 1, 0.5, 1400);
   const size = { w: 1, h: 1 };
-  let fovBoost = 0;                                   // extra field of view, used by the intro flight
-  const baseFov = (aspect) => clamp(38 * Math.pow(Math.max(1, 1 / aspect), 0.9), 38, 68); // wider on tall phone screens
+  let fovBoost = 0;
+  const baseFov = (aspect) => clamp(38 * Math.pow(Math.max(1, 1 / aspect), 0.9), 38, 68);
 
-  // Camera views come from config.js in the old, un-scaled units and are converted here.
   const rawViews = {
     home: { position: [20, 9, 30], target: [0, 2, 6] },
     explore: { position: [22, 26, 38], target: [0, 1, 9] },
@@ -204,33 +184,30 @@ export async function createWorld(opts) {
   const views = {};
   Object.keys(rawViews).forEach((id) => {
     const v = rawViews[id];
-    const wide = id === 'home' || id === 'explore';
-    const k = wide ? CAMERA_SCALE : S;                // close-up views scale with the world so framing stays the same
+    const k = id === 'explore' ? EXPLORE_SCALE : id === 'home' ? CAMERA_SCALE : S;   // close-ups scale with the world so framing stays the same
     views[id] = { position: v.position.map((n) => n * k), target: v.target.map((n) => n * S) };
   });
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.07;
-  controls.enablePan = false;                          // visitors can rotate and zoom, but not slide away from the island
+  controls.enablePan = false;
   controls.rotateSpeed = 0.55;
   controls.zoomSpeed = 0.7;
   controls.autoRotateSpeed = 0.45;
   controls.target.fromArray(views.home.target);
 
   function setLimits(m) {
-    if (m === 'section') {                             // panels fly the camera close: relax the limits (controls are off here)
-      controls.minDistance = 0.5; controls.maxDistance = 500;
+    if (m === 'section') {
+      controls.minDistance = 0.5; controls.maxDistance = 600;
       controls.minPolarAngle = 0; controls.maxPolarAngle = Math.PI;
     } else {
-      controls.minDistance = 13 * CAMERA_SCALE; controls.maxDistance = 58 * S;
-      controls.minPolarAngle = 0.3; controls.maxPolarAngle = 1.5;   // never below the island's horizon
+      controls.minDistance = 13 * CAMERA_SCALE; controls.maxDistance = Math.max(58, R * 2.0) * S;
+      controls.minPolarAngle = 0.3; controls.maxPolarAngle = 1.5;
     }
   }
   setLimits('home');
 
-  /* "View shift" slides the whole picture sideways or up, so the island stays visible
-     beside a panel. It also adds a tiny pointer-based parallax. */
   const shift = { x: 0, y: 0 };
   const par = { x: 0, y: 0, tx: 0, ty: 0 };
   let lastOx = NaN, lastOy = NaN;
@@ -258,8 +235,8 @@ export async function createWorld(opts) {
   /* ---------------------------------------------------------------- */
   /* shared building helpers                                           */
   /* ---------------------------------------------------------------- */
-  const animators = [];                                // decorative motion, skipped when the visitor prefers reduced motion
-  const always = [];                                   // state changes that must always run (hover feedback)
+  const animators = [];
+  const always = [];
   const matCache = new Map(), geoCache = new Map();
   const mat = (color, o = {}) => {
     const key = color + JSON.stringify(o);
@@ -277,15 +254,13 @@ export async function createWorld(opts) {
   const cyl = (p, rt, rb, h, seg, x, y, z, color, o) => put(p, geo(`cyl${rt},${rb},${h},${seg}`, () => new THREE.CylinderGeometry(rt, rb, h, seg)), mat(color, o), x, y, z);
   const cone = (p, r, h, seg, x, y, z, color, o) => put(p, geo(`cone${r},${h},${seg}`, () => new THREE.ConeGeometry(r, h, seg)), mat(color, o), x, y, z);
   const ball = (p, r, x, y, z, color, o) => put(p, geo(`ball${r}`, () => new THREE.SphereGeometry(r, 10, 8)), mat(color, o), x, y, z);
-  // A triangular prism (roof shape), lying along the z axis.
   const prism = (p, r, len, x, y, z, color, hScale = 1) => { const m = put(p, geo(`prism${r},${len}`, () => new THREE.CylinderGeometry(r, r, len, 3)), mat(color), x, y, z); m.rotation.x = -Math.PI / 2; m.scale.z = hScale; return m; };
-  // A flat slab lying on the ground (roads, pavements, lawns). It never casts a shadow.
   const slab = (p, cx, cz, sx, sz, color, y = 0.03, h = 0.05) => { const m = box(p, sx, h, sz, cx, y, cz, color); m.castShadow = false; return m; };
 
   function canvasTextureWH(w, h, draw) {
     const c = document.createElement('canvas'); c.width = w; c.height = h;
     const ctx = c.getContext('2d');
-    if (ctx) draw(ctx, w, h);           // some locked-down browsers hand back a null 2D context; skip drawing rather than crash
+    if (ctx) draw(ctx, w, h);
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
     return t;
@@ -326,60 +301,66 @@ export async function createWorld(opts) {
           #include <colorspace_fragment>
         }`,
     });
-    const sky = new THREE.Mesh(new THREE.SphereGeometry(640, 24, 16), skyMat);
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(900, 24, 16), skyMat);
     sky.renderOrder = -10; sky.frustumCulled = false; scene.add(sky);
 
-    scene.add(new THREE.HemisphereLight(0xcfe6ff, 0xa58bd6, 1.25));    // sky colour from above, purple bounce from below
+    scene.add(new THREE.HemisphereLight(0xcfe6ff, 0xa58bd6, 1.25));
 
     sunLight = new THREE.DirectionalLight(0xfff0d0, 2.4);
-    sunLight.position.set(22, 36, 18);
+    sunLight.position.set(30, 48, 24);
     if (!simple) {
       sunLight.castShadow = true;
       const ms = small ? 2048 : 4096;
       sunLight.shadow.mapSize.set(ms, ms);
       const c = sunLight.shadow.camera;
-      const e = R * S + 3;
-      c.left = -e; c.right = e; c.top = e; c.bottom = -e; c.near = 1; c.far = 160;
+      const e = R * S + 4;
+      c.left = -e; c.right = e; c.top = e; c.bottom = -e; c.near = 1; c.far = 260;
       sunLight.shadow.bias = -0.0003; sunLight.shadow.normalBias = 0.05;
       sunLight.shadow.radius = 2.5;
     }
     scene.add(sunLight);
 
-    const fill = new THREE.DirectionalLight(0x9f8cff, 0.6);           // cool purple fill from the opposite side
+    const fill = new THREE.DirectionalLight(0x9f8cff, 0.6);
     fill.position.set(-8, 6, -10); scene.add(fill);
 
-    const sunDir = new THREE.Vector3(10, 16, 8).normalize().multiplyScalar(560);
-    glow(scene, 0xfff2c8, 130, 0.7, sunDir.x, sunDir.y, sunDir.z);
+    const sunDir = new THREE.Vector3(10, 16, 8).normalize().multiplyScalar(800);
+    glow(scene, 0xfff2c8, 190, 0.7, sunDir.x, sunDir.y, sunDir.z);
   });
 
   /* ---------------------------------------------------------------- */
   /* 3. terrain: island, hills, roads                                  */
   /* ---------------------------------------------------------------- */
-  // The city sits in this rectangle on the south side. The ground is perfectly flat inside it.
   const CITY = { x0: -11.5, x1: 11.5, z0: 14.5, z1: 25.8 };
-  const AVENUE_Z = 22.6;                              // the main east-west street
+  const CITY2 = { x0: -30.5, x1: -13.0, z0: 15.0, z1: 28.0 };       // the west district
+  const AVENUE_Z = 22.6;
+  const AIRPORT = { x0: -34.5, x1: -20.5, z0: -9.5, z1: 2.5 };
+  const RAIL = { x0: 14.0, x1: 27.0, z0: 16.5, z1: 24.0 };
   const rectMask = (x, z, r, m) => 1 - smoothstep(0, m, Math.hypot(Math.max(r.x0 - x, 0, x - r.x1), Math.max(r.z0 - z, 0, z - r.z1)));
 
-  // Hills: [x, z, height, radius]. Edit these to move the mountains.
+  // Hills: [x, z, height, radius].
   const BUMPS = [
     [-8, -8.5, 6.0, 6.5], [-1.5, -10, 8.6, 7.5], [6, -8.8, 6.5, 6.5], [11.5, -5.5, 4.5, 5.5], [-12.5, -5.5, 4.2, 5.2],
     [-21, 9, 3.4, 5.5], [-20, -9, 4.2, 6], [18, -14, 3.8, 5.5], [21, 4, 2.8, 4.5], [-4, -20, 3.6, 6], [10, -21, 3.0, 5],
+    // the outer mountain ring
+    [28, -24, 4.6, 6.5], [-30, -22, 5.0, 7], [36, -10, 3.6, 5.5], [-8, -33, 4.6, 6.5], [8, -34, 4.0, 6],
+    [-18, -30, 3.8, 6], [20, -31, 3.6, 6],
   ];
-  // Flat building areas: [x, z, radius, height]. Everything that sits on the ground has one.
   const ZONES = [
-    { x: -6.2, z: 6.8, r: 2.2, y: 0 },    // camper van
-    { x: -3.6, z: 8.0, r: 2.0, y: 0 },    // campfire
-    { x: -8.8, z: 8.0, r: 1.6, y: 0 },    // tent
-    { x: -0.5, z: -3.2, r: 2.0, y: 0 },   // Nexora tower
-    { x: 9.8, z: 0.2, r: 3.2, y: 0 },     // farm
-    { x: 2.0, z: 9.5, r: 1.5, y: 0 },     // skills signpost
-    { x: 10.8, z: 6.6, r: 1.3, y: 0 },    // mailbox
-    { x: -9.6, z: -1.2, r: 2.0, y: 0 },   // school
-    { x: -5.6, z: 0.3, r: 2.0, y: -0.18 }, // pond
-    { x: -1.4, z: 10.8, r: 1.5, y: 0 },   // village house
-    { x: -15.5, z: 7.5, r: 6.0, y: 0 },   // HealthGIS HQ courtyard
+    { x: -6.2, z: 6.8, r: 2.2, y: 0 },
+    { x: -3.6, z: 8.0, r: 2.0, y: 0 },
+    { x: -8.8, z: 8.0, r: 1.6, y: 0 },
+    { x: -0.5, z: -3.2, r: 2.0, y: 0 },
+    { x: 9.8, z: 0.2, r: 3.2, y: 0 },
+    { x: 2.0, z: 9.5, r: 1.5, y: 0 },
+    { x: 10.8, z: 6.6, r: 1.3, y: 0 },
+    { x: -9.6, z: -1.2, r: 2.0, y: 0 },
+    { x: -5.6, z: 0.3, r: 2.0, y: -0.18 },
+    { x: -1.4, z: 10.8, r: 1.5, y: 0 },
+    { x: -15.5, z: 7.5, r: 6.0, y: 0 },
+    { x: 24.0, z: -4.0, r: 6.0, y: 0 },
+    { x: 31.0, z: 8.0, r: 5.2, y: -0.18 },   // the lake
+    { x: 33.0, z: 27.0, r: 2.6, y: 0 },      // the lighthouse
   ];
-  // The long road: west edge -> village -> farm -> down the hill into the city's avenue.
   const roadPts = [
     [-21, 1.2], [-17, 2.2], [-13.4, 3.0], [-10, 5.5], [-6, 4.2], [-2.5, 5.8], [1.5, 4.5], [4.5, 2.5], [7.5, 4.0], [8.6, 7.4],
     [7.8, 10.2], [6.9, 13.4], [7.5, 16.5], [7.8, 19.4], [7.7, AVENUE_Z],
@@ -392,8 +373,7 @@ export async function createWorld(opts) {
     return Math.sqrt(m);
   }
 
-  // Height of the ground at any (x, z). Used to build the island AND to place objects on it.
-  const HILL_SOFTEN = 0.62;    // tones the mountains down so the map reads as a city with hills at its edges, not an island peak
+  const HILL_SOFTEN = 0.62;
   function terrainH(x, z) {
     const r = Math.hypot(x, z);
     let h = 0;
@@ -403,36 +383,40 @@ export async function createWorld(opts) {
     h += (vnoise(x * 0.35 + 10, z * 0.35) - 0.5) * 0.35 * (1 - Math.min(1, h / 1.2));
     h = lerp(h, 0, 1 - smoothstep(2.2, 4.4, roadDist(x, z)));
     for (const zn of ZONES) { const d = Math.hypot(x - zn.x, z - zn.z); h = lerp(h, zn.y, 1 - smoothstep(zn.r, zn.r * 1.8, d)); }
-    h = lerp(h, 0, rectMask(x, z, CITY, 2.4));         // the city ground is dead flat
+    h = lerp(h, 0, rectMask(x, z, CITY, 2.4));
+    h = lerp(h, 0, rectMask(x, z, CITY2, 2.4));
+    h = lerp(h, 0, rectMask(x, z, AIRPORT, 3.0));
+    h = lerp(h, 0, rectMask(x, z, RAIL, 2.4));
     return lerp(h, 0, smoothstep(R - 0.8, R, r));
   }
+  function inRect(x, z, r, margin) { return x > r.x0 - margin && x < r.x1 + margin && z > r.z0 - margin && z < r.z1 + margin; }
   function isClear(x, z, margin) {
     for (const zn of ZONES) if (Math.hypot(x - zn.x, z - zn.z) < zn.r + margin) return false;
-    if (x > CITY.x0 - margin - 1 && x < CITY.x1 + margin + 1 && z > CITY.z0 - margin - 1 && z < CITY.z1 + margin + 1) return false;
+    if (inRect(x, z, CITY, margin + 1) || inRect(x, z, CITY2, margin + 1) || inRect(x, z, AIRPORT, margin + 1) || inRect(x, z, RAIL, margin + 1)) return false;
     return roadDist(x, z) > 1.5 + margin;
   }
 
   const STOPS = [[0, '#7bd88f'], [0.7, '#62c4a0'], [1.5, '#7d74d8'], [3, '#6a55c8'], [4.8, '#4b3fa6'], [6.2, '#7c6be0'], [7.6, '#c9bfff'], [9.5, '#f0ecff']]
     .map(([h, c]) => [h, new THREE.Color(c)]);
-  function terrainColor(h, rnd, out) {                // green meadow -> violet -> indigo -> pale peaks
+  function terrainColor(h, rnd, out) {
     let i = 0;
     while (i < STOPS.length - 2 && h > STOPS[i + 1][0]) i++;
     const [h0, c0] = STOPS[i], [h1, c1] = STOPS[i + 1];
     out.copy(c0).lerp(c1, clamp((h - h0) / (h1 - h0), 0, 1));
-    out.offsetHSL(0, 0, (Math.floor(h / 0.9) % 2 ? 0.035 : 0) + (rnd - 0.5) * 0.07);   // faint layers + faceted variation
+    out.offsetHSL(0, 0, (Math.floor(h / 0.9) % 2 ? 0.035 : 0) + (rnd - 0.5) * 0.07);
     return out;
   }
 
   let terrain;
   await stage(0.08, 'Raising the island', () => {
-    const RINGS = simple ? 26 : 44, SEG = simple ? 60 : 108;
+    const RINGS = simple ? 30 : 58, SEG = simple ? 72 : 144;
     const grid = [];
     for (let i = 0; i <= RINGS; i++) {
       const row = [], r = (R * i) / RINGS;
       for (let j = 0; j < SEG; j++) {
         const a = (TAU * j) / SEG;
         let x = r * Math.cos(a), z = r * Math.sin(a);
-        if (i > 0 && i < RINGS) {                      // wobble inner points a little so triangles look hand-made
+        if (i > 0 && i < RINGS) {
           const ox = x, oz = z, jit = (R / RINGS) * 0.26;
           x += (hash3(ox * 10, 1, oz * 10) - 0.5) * jit * 2; z += (hash3(ox * 10, 2, oz * 10) - 0.5) * jit * 2;
         }
@@ -458,25 +442,24 @@ export async function createWorld(opts) {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    g.computeVertexNormals();                          // not indexed, so every triangle gets its own flat normal
+    g.computeVertexNormals();
     terrain = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
     terrain.castShadow = true; terrain.receiveShadow = true;
     W.add(terrain);
 
-    // Soil band and the jagged purple rock underneath.
     const soil = new THREE.Mesh(new THREE.CylinderGeometry(R, R * 0.94, 1.4, SEG, 1, true), mat('#b9825f'));
     soil.position.y = -0.7; soil.receiveShadow = true; W.add(soil);
 
-    const lip = new THREE.Mesh(new THREE.TorusGeometry(R - 0.02, 0.09, 6, SEG), mat('#6fd08a'));   // grassy lip on the edge
+    const lip = new THREE.Mesh(new THREE.TorusGeometry(R - 0.02, 0.1, 6, SEG), mat('#6fd08a'));
     lip.rotation.x = Math.PI / 2; lip.position.y = 0.01; W.add(lip);
 
-    const rockH = 17, top = rockH / 2;
-    const rockGeo = new THREE.ConeGeometry(R * 0.94, rockH, simple ? 22 : 36, 6, true);
+    const rockH = 22, top = rockH / 2;
+    const rockGeo = new THREE.ConeGeometry(R * 0.94, rockH, simple ? 22 : 40, 6, true);
     const rp = rockGeo.attributes.position;
     for (let i = 0; i < rp.count; i++) {
       const x = rp.getX(i), y = rp.getY(i), z = rp.getZ(i);
-      const amp = clamp((y + top) / 3, 0, 1);       // 0 at the rim (matches the soil band), 1 toward the tip
-      rp.setXYZ(i, x + (hash3(x, y, z) - 0.5) * amp * 2.2, y + (hash3(x, y + 1, z) - 0.5) * amp, z + (hash3(x, y, z + 1) - 0.5) * amp * 2.2);
+      const amp = clamp((y + top) / 3, 0, 1);
+      rp.setXYZ(i, x + (hash3(x, y, z) - 0.5) * amp * 2.6, y + (hash3(x, y + 1, z) - 0.5) * amp, z + (hash3(x, y, z + 1) - 0.5) * amp * 2.6);
     }
     const rock = new THREE.Mesh(rockGeo, mat('#5a4aa8'));
     rock.rotation.x = Math.PI; rock.position.y = -1.4 - top; rock.castShadow = true; W.add(rock);
@@ -485,7 +468,7 @@ export async function createWorld(opts) {
   await stage(0.14, 'Paving the roads', () => {
     const N = 260;
     const pts = roadCurve.getSpacedPoints(N);
-    const side = pts.map((p, i) => {                  // sideways direction at each point
+    const side = pts.map((p, i) => {
       const a = pts[Math.max(0, i - 1)], b = pts[Math.min(N, i + 1)];
       const t = new THREE.Vector3().subVectors(b, a).setY(0).normalize();
       return new THREE.Vector3(-t.z, 0, t.x);
@@ -495,7 +478,7 @@ export async function createWorld(opts) {
       const lim = (p, s, o) => [p.x + s.x * o, y, p.z + s.z * o];
       for (let i = 0; i < N; i++) {
         const L0 = lim(pts[i], side[i], o1), R0 = lim(pts[i], side[i], o2), L1 = lim(pts[i + 1], side[i + 1], o1), R1 = lim(pts[i + 1], side[i + 1], o2);
-        if (Math.hypot(pts[i].x, pts[i].z) > R - 0.4) continue;            // stop before the island's edge
+        if (Math.hypot(pts[i].x, pts[i].z) > R - 0.4) continue;
         verts.push(...L0, ...R0, ...L1, ...R0, ...R1, ...L1);
       }
       const g = new THREE.BufferGeometry();
@@ -508,7 +491,6 @@ export async function createWorld(opts) {
     ribbon(-0.93, -0.78, 0.06, '#f5e6c8', -2);
     ribbon(0.78, 0.93, 0.06, '#f5e6c8', -2);
 
-    // Dashed centre line, drawn with one instanced mesh.
     const dashes = 56, im = new THREE.InstancedMesh(geo('box', () => new THREE.BoxGeometry(1, 1, 1)), new THREE.MeshLambertMaterial({ color: '#fff1dc' }), dashes);
     const d = new THREE.Object3D();
     for (let i = 0; i < dashes; i++) {
@@ -534,10 +516,10 @@ export async function createWorld(opts) {
     parts.push(paintGeo(new THREE.ConeGeometry(0.26, 0.6, 7).translate(0, 1.6, 0), '#46c28f'));
     const treeGeo = mergeGeometries(parts);
 
-    const target = simple ? 90 : small ? 170 : 280;
-    for (let tries = 0; tries < 7000 && treeData.length < target; tries++) {
+    const target = simple ? 130 : small ? 240 : 420;
+    for (let tries = 0; tries < 16000 && treeData.length < target; tries++) {
       const rr = Math.sqrt(rng()) * (R - 2.2), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a);
-      if (vnoise(x * 0.28 + 3, z * 0.28) < 0.38 && rng() < 0.85) continue;          // trees grow in clusters
+      if (vnoise(x * 0.28 + 3, z * 0.28) < 0.38 && rng() < 0.85) continue;
       const h = terrainH(x, z);
       if (h > 5.3 || !isClear(x, z, 0.9)) continue;
       if (treeData.some((t) => (t.x - x) ** 2 + (t.z - z) ** 2 < 1.2)) continue;
@@ -557,7 +539,7 @@ export async function createWorld(opts) {
       dummy.scale.setScalar(t.s); dummy.updateMatrix();
     };
     treeData.forEach((t, i) => { place(t, 0); trees.setMatrixAt(i, dummy.matrix); });
-    animators.push((dt, time) => {                    // trees sway gently (every other frame to save work)
+    animators.push((dt, time) => {
       if ((swayFrame++ & 1) || small) return;
       treeData.forEach((t, i) => { place(t, time); trees.setMatrixAt(i, dummy.matrix); });
       trees.instanceMatrix.needsUpdate = true;
@@ -565,16 +547,14 @@ export async function createWorld(opts) {
   });
 
   await stage(0.26, 'Blooming blossom trees and bushes', () => {
-    // IcosahedronGeometry (used below for the blossom blobs) is always non-indexed in three.js,
-    // so the trunk must be made non-indexed too, or mergeGeometries() silently returns null.
     const parts = [paintGeo(new THREE.CylinderGeometry(0.06, 0.1, 0.7, 6).toNonIndexed().translate(0, 0.35, 0), '#8a5a44')];
     [[0, 1.0, 0, 0.5], [0.3, 0.85, 0.12, 0.34], [-0.28, 0.9, -0.1, 0.36], [0.05, 1.32, 0.05, 0.34]].forEach(([x, y, z, r]) => {
       parts.push(paintGeo(new THREE.IcosahedronGeometry(r, 1).translate(x, y, z), '#ffffff'));
     });
     const bGeo = mergeGeometries(parts);
     const blossoms = [];
-    const want = simple ? 8 : 30;
-    for (let tries = 0; tries < 2500 && blossoms.length < want; tries++) {
+    const want = simple ? 12 : 46;
+    for (let tries = 0; tries < 5000 && blossoms.length < want; tries++) {
       const rr = Math.sqrt(rng()) * (R - 3), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
       if (h > 1.2 || !isClear(x, z, 1.3)) continue;
       if (treeData.some((t) => (t.x - x) ** 2 + (t.z - z) ** 2 < 2.2)) continue;
@@ -590,7 +570,7 @@ export async function createWorld(opts) {
     bMesh.castShadow = true; bMesh.receiveShadow = true; bMesh.frustumCulled = false; W.add(bMesh);
 
     const bushes = [];
-    for (let tries = 0; tries < 2500 && bushes.length < (simple ? 30 : 100); tries++) {
+    for (let tries = 0; tries < 5000 && bushes.length < (simple ? 45 : 160); tries++) {
       const rr = Math.sqrt(rng()) * (R - 2), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
       if (h > 2.6 || !isClear(x, z, 0.5)) continue;
       bushes.push({ x, y: h, z, s: 0.5 + rng() * 0.6 });
@@ -606,7 +586,7 @@ export async function createWorld(opts) {
 
   await stage(0.32, 'Scattering rocks and flowers', () => {
     const rocks = [];
-    for (let tries = 0; tries < 1500 && rocks.length < (simple ? 18 : 50); tries++) {
+    for (let tries = 0; tries < 2500 && rocks.length < (simple ? 26 : 70); tries++) {
       const rr = Math.sqrt(rng()) * (R - 1.5), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
       if (h > 6.5 || !isClear(x, z, 0.7)) continue;
       rocks.push({ x, y: h, z, s: 0.25 + rng() * 0.45, ry: rng() * TAU });
@@ -620,7 +600,7 @@ export async function createWorld(opts) {
     rockMesh.castShadow = true; rockMesh.receiveShadow = true; W.add(rockMesh);
 
     const flowers = [];
-    for (let tries = 0; tries < 2500 && flowers.length < (simple ? 60 : 220); tries++) {
+    for (let tries = 0; tries < 5000 && flowers.length < (simple ? 90 : 360); tries++) {
       const rr = Math.sqrt(rng()) * (R - 1.5), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
       if (h > 0.6 || !isClear(x, z, 0.3)) continue;
       flowers.push({ x, y: h, z, s: 0.8 + rng() * 0.6 });
@@ -634,20 +614,19 @@ export async function createWorld(opts) {
     });
     W.add(stems); W.add(fm);
 
-    // Pond
     const pond = new THREE.Group(); pond.position.set(-5.6, 0, 0.3); W.add(pond);
-    const bank = cyl(pond, 2.1, 2.2, 0.06, 20, 0, -0.11, 0, '#c9b28a'); bank.castShadow = false;          // sandy rim
+    const bank = cyl(pond, 2.1, 2.2, 0.06, 20, 0, -0.11, 0, '#c9b28a'); bank.castShadow = false;
     const water = cyl(pond, 1.9, 1.9, 0.04, 20, 0, -0.07, 0, '#5fd0e8', { emissive: '#1f7f9a', emissiveIntensity: 0.35 });
     water.castShadow = false;
-    for (let i = 0; i < 9; i++) {                      // reeds and lily pads around the edge
+    for (let i = 0; i < 9; i++) {
       const a = rng() * TAU, r = 1.85 + rng() * 0.3;
       if (i < 5) cone(pond, 0.05, 0.6 + rng() * 0.3, 4, Math.cos(a) * r, 0.2, Math.sin(a) * r, '#3f9e6a');
       else {
         const lp = cyl(pond, 0.22, 0.22, 0.02, 8, Math.cos(a) * (r - 0.9), -0.04, Math.sin(a) * (r - 0.9), '#4fae7a'); lp.castShadow = false;
-        ball(pond, 0.05, Math.cos(a) * (r - 0.9), -0.01, Math.sin(a) * (r - 0.9), '#ffb3c7').castShadow = false;   // lotus bud
+        ball(pond, 0.05, Math.cos(a) * (r - 0.9), -0.01, Math.sin(a) * (r - 0.9), '#ffb3c7').castShadow = false;
       }
     }
-    const ripples = [0, 1, 2].map((i) => {            // rippling water rings
+    const ripples = [0, 1, 2].map((i) => {
       const m = new THREE.Mesh(new THREE.RingGeometry(0.9, 0.96, 28), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
       m.rotation.x = -Math.PI / 2; m.position.set(0.6, -0.04, -0.2); pond.add(m); return { m, off: i / 3 };
     });
@@ -659,12 +638,7 @@ export async function createWorld(opts) {
 
   /* ---------------------------------------------------------------- */
   /* makePerson: a small, friendly person with a face                  */
-  /* ----------------------------------------------------------------
-     Options: skin, shirt, pants, hair, shoes, belt,
-              hairStyle ('short' | 'long' | 'pony' | 'none'),
-              hat ('straw' | 'beanie'), hatColor, backpack (colour),
-              shorts (true/false), longSleeve (true/false)
-     Returns the group plus the moving parts used by the pose system.   */
+  /* ---------------------------------------------------------------- */
   function makePerson(o = {}) {
     const skin = o.skin || '#f2c7a5', shirt = o.shirt || '#ff6b5e', pants = o.pants || '#2b2850';
     const hairC = o.hair || '#241f4d', shoeC = o.shoes || '#fff8ec', HIP = 0.4;
@@ -675,17 +649,15 @@ export async function createWorld(opts) {
     const g = new THREE.Group();
     const upper = new THREE.Group(); upper.position.y = HIP; g.add(upper);
 
-    /* torso, shoulders, belt, neck */
     const torso = cyl(upper, 0.12, 0.105, 0.38, 14, 0, 0.19, 0, shirt, { flatShading: false }); torso.scale.set(0.8, 1, 1.3);
     const sh = put(upper, geo('shoulder', () => new THREE.SphereGeometry(0.1, 14, 10)), soft(shirt), 0, 0.345, 0); sh.scale.set(0.82, 0.55, 1.75);
     const belt = cyl(upper, 0.108, 0.108, 0.045, 14, 0, 0.03, 0, o.belt || '#3a2f5b', { flatShading: false }); belt.scale.set(0.8, 1, 1.3); belt.castShadow = false;
     box(upper, 0.03, 0.04, 0.05, 0.088, 0.03, 0, '#e8b23a').castShadow = false;
     cyl(upper, 0.042, 0.048, 0.08, 10, 0, 0.41, 0, skin, { flatShading: false });
 
-    /* head */
     const head = new THREE.Group(); head.position.set(0.01, 0.56, 0); upper.add(head);
     const skull = sphere(head, 0.135, 0, 0, 0, skin); skull.scale.set(0.95, 1.08, 0.92);
-    sphere(head, 0.03, 0, -0.01, 0.126, skin, false).scale.set(0.5, 1, 0.8);            // ears
+    sphere(head, 0.03, 0, -0.01, 0.126, skin, false).scale.set(0.5, 1, 0.8);
     sphere(head, 0.03, 0, -0.01, -0.126, skin, false).scale.set(0.5, 1, 0.8);
     [0.05, -0.05].forEach((z) => {
       const white = smallPart(head, geo('eyeW', () => new THREE.SphereGeometry(0.026, 12, 8)), soft('#ffffff'), 0.109, 0.014, z); white.scale.set(0.7, 1, 0.95);
@@ -699,7 +671,6 @@ export async function createWorld(opts) {
     const smile = smallPart(smileHolder, geo('smile', () => new THREE.TorusGeometry(0.028, 0.0065, 6, 12, Math.PI)), soft('#a8453f'));
     smile.rotation.z = Math.PI;
 
-    /* hair, hats */
     const hairMat = soft(hairC);
     const style = o.hairStyle || 'short';
     if (style !== 'none' && o.hat !== 'beanie') {
@@ -729,19 +700,17 @@ export async function createWorld(opts) {
       sphere(head, 0.045, -0.01, 0.17, 0, '#fff1dc');
     }
 
-    /* arms: shoulder, sleeve, elbow, forearm, hand */
     function makeArm(zSide) {
       const arm = new THREE.Group(); arm.position.set(0, 0.34, zSide * 0.19); upper.add(arm);
       sphere(arm, 0.052, 0, 0, 0, shirt);
       cyl(arm, 0.047, 0.04, 0.2, 10, 0, -0.1, 0, shirt, { flatShading: false });
       const elbow = new THREE.Group(); elbow.position.y = -0.2; elbow.rotation.z = 0.12; arm.add(elbow);
       cyl(elbow, 0.036, 0.029, 0.17, 10, 0, -0.085, 0, o.longSleeve ? shirt : skin, { flatShading: false });
-      sphere(elbow, 0.035, 0, -0.185, 0, skin);                                          // hand
+      sphere(elbow, 0.035, 0, -0.185, 0, skin);
       return { arm, elbow };
     }
     const aL = makeArm(1), aR = makeArm(-1);
 
-    /* legs: thigh, knee, shin, shoe */
     function makeLeg(zSide) {
       const leg = new THREE.Group(); leg.position.set(0, HIP, zSide * 0.075); g.add(leg);
       cyl(leg, 0.062, 0.049, 0.2, 10, 0, -0.1, 0, pants, { flatShading: false });
@@ -764,13 +733,9 @@ export async function createWorld(opts) {
 
   /* ---------------------------------------------------------------- */
   /* AGENTS: people with a job                                         */
-  /* ----------------------------------------------------------------
-     Every agent has a list of STEPS that repeats forever:
-       { go: [x, z] }                         walk to a spot
-       { wait: seconds, pose, face: [dx,dz] } stand there doing something
-       { do: (agent) => { ... } }             instant action (open a door, hide...)
-     POSES: idle walk type draw phone talk point farm water give sit wave fish
-     To give someone a new job, just write a new list of steps.        */
+  /*   { go: [x, z] } walk | { wait, pose, face } stand | { do: fn } act */
+  /*   POSES: idle walk type draw phone talk point farm water give sit wave fish */
+  /* ---------------------------------------------------------------- */
   const JOINTS = ['up', 'hy', 'hz', 'alx', 'alz', 'arx', 'arz', 'elz', 'erz', 'elx', 'erx', 'll', 'lr', 'sl', 'sr'];
   function poseTarget(a, pose, t) {
     const ph = a.ph, wp = a.wp;
@@ -796,7 +761,7 @@ export async function createWorld(opts) {
       case 'phone':
         seated(); T.alz = 0.5; T.elz = 2.3; T.arz = 1.15 + Math.sin(t * 11 + ph) * 0.03; T.erz = 0.55 + Math.sin(t * 15 + ph) * 0.12;
         T.hz = -0.05; T.hy = Math.sin(t * 1.2 + ph) * 0.2; T.up = -0.03; break;
-      case 'talk':                                       // BOTH hands move while talking
+      case 'talk':
         T.alx = -0.35 + Math.sin(t * 2.3 + ph) * 0.25; T.alz = 0.9 + Math.sin(t * 3.1 + ph) * 0.25;
         T.arx = 0.35 - Math.sin(t * 2.3 + ph + 1) * 0.25; T.arz = 0.9 + Math.sin(t * 2.7 + ph + 0.8) * 0.25;
         T.elz = 0.9 + Math.sin(t * 4.1 + ph) * 0.35; T.erz = 0.9 + Math.sin(t * 3.7 + ph + 1) * 0.35;
@@ -804,7 +769,7 @@ export async function createWorld(opts) {
       case 'point':
         T.arz = 1.45; T.erz = 0.05; T.alz = 0.08; T.hy = 0.1; break;
       case 'farm': {
-        const s = Math.sin(t * 3 + ph);                  // swing the hoe
+        const s = Math.sin(t * 3 + ph);
         T.up = -0.5 - 0.1 * s; T.hz = 0.45; T.alz = 0.9 + s * 0.5; T.arz = 0.95 + s * 0.5; T.elz = 0.3; T.erz = 0.3;
         T.ll = T.lr = 0.15; T.sl = T.sr = -0.1; break;
       }
@@ -819,7 +784,7 @@ export async function createWorld(opts) {
         T.up = Math.sin(t * 1.4 + ph) * 0.025; T.hy = Math.sin(t * 0.8 + ph) * 0.3; break;
       case 'fish':
         T.alz = 1.15; T.arz = 0.95; T.elz = 0.3; T.erz = 0.3; T.hz = 0.18; T.up = Math.sin(t * 0.8) * 0.02 - 0.03; T.hy = Math.sin(t * 0.5) * 0.12; break;
-      default:                                           // idle
+      default:
         T.up = Math.sin(t * 1.5 + ph) * 0.015; T.hy = Math.sin(t * 0.5 + ph) * 0.25;
     }
     return T;
@@ -844,8 +809,8 @@ export async function createWorld(opts) {
     };
     JOINTS.forEach((j) => { a.cur[j] = 0; });
     agents.push(a);
-    advanceAgent(a, 0.0001, 0);                       // choose the first pose
-    applyPose(a, 1, 0, true);                         // snap into it, so even "reduced motion" shows a sensible pose
+    advanceAgent(a, 0.0001, 0);
+    applyPose(a, 1, 0, true);
     placeAgent(a, 0);
     animators.push((dt, t) => { advanceAgent(a, dt, t); applyPose(a, dt, t, false); placeAgent(a, dt); });
     return a;
@@ -879,7 +844,6 @@ export async function createWorld(opts) {
     a.p.group.visible = !a.hidden;
   }
 
-  // Roads: follow the road between two spots (returns a list of [x, z] points, offset to one side).
   function roadPath(ax, az, bx, bz, sideOffset = 0.35, stride = 3) {
     const nearest = (x, z) => { let bi = 0, bd = 1e9; roadSamples.forEach((p, i) => { const d = (p.x - x) ** 2 + (p.z - z) ** 2; if (d < bd) { bd = d; bi = i; } }); return bi; };
     const ia = nearest(ax, az), ib = nearest(bx, bz), dir = ib >= ia ? 1 : -1, out = [];
@@ -893,21 +857,21 @@ export async function createWorld(opts) {
     return out;
   }
 
-  // Shared state used by the city and the people.
-  const doors = [];                                    // every house door: { pivot, open, target }
-  const monitorMats = [];                              // office screens that flicker, shared by every office building
-  let hqGroup = null;                                   // Astropulse SMM's group
-  let hq2Group = null;                                  // HealthGIS's group
+  const doors = [];
+  const monitorMats = [];
+  let hqGroup = null;
+  let hq2Group = null;
+  let hq3Group = null;
 
   function makeHouse(x, z, face, wall, roof) {
     const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = face; W.add(g);
     box(g, 1.8, 0.95, 1.5, 0, 0.475, 0, wall);
     prism(g, 1.05, 1.65, 0, 1.22, 0, roof, 0.55);
-    box(g, 0.4, 0.62, 0.02, 0, 0.31, 0.752, '#241f4d');                          // dark doorway
+    box(g, 0.4, 0.62, 0.02, 0, 0.31, 0.752, '#241f4d');
     const pivot = new THREE.Group(); pivot.position.set(-0.17, 0, 0.77); g.add(pivot);
-    box(pivot, 0.34, 0.58, 0.04, 0.17, 0.3, 0, '#6c58cf');                       // the door, hinged on its left edge
+    box(pivot, 0.34, 0.58, 0.04, 0.17, 0.3, 0, '#6c58cf');
     [-0.58, 0.58].forEach((wx) => box(g, 0.3, 0.28, 0.04, wx, 0.58, 0.76, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.3 }));
-    box(g, 0.22, 0.45, 0.22, 0.55, 1.45, -0.2, '#8a5a44');                      // chimney
+    box(g, 0.22, 0.45, 0.22, 0.55, 1.45, -0.2, '#8a5a44');
     const d = { pivot, open: 0, target: 0 }; doors.push(d);
     const dx = Math.sin(face), dz = Math.cos(face);
     return { g, door: d, doorPt: [x + dx * 0.62, z + dz * 0.62], frontPt: [x + dx * 1.5, z + dz * 1.5] };
@@ -922,18 +886,18 @@ export async function createWorld(opts) {
     van.group.position.set(-6.2, 0, 6.8); van.group.rotation.y = -0.25; W.add(van.group);
     const g = van.body; van.group.add(g);
     const CORAL = '#ff6b5e', CREAM = '#fff1dc', GLASS = '#bfe4ff', DARK = '#2b2850';
-    box(g, 2.3, 0.12, 0.95, 0, 0.34, 0, DARK);                           // chassis
-    box(g, 1.9, 1.15, 1.0, -0.2, 0.98, 0, CORAL);                        // main body
-    box(g, 0.5, 0.55, 1.0, 0.95, 0.68, 0, CORAL);                        // bonnet
-    box(g, 1.92, 0.16, 1.02, -0.2, 0.78, 0, CREAM);                      // cream stripe
-    box(g, 1.5, 0.28, 0.9, -0.3, 1.7, 0, CREAM);                         // pop-top roof
-    const ws = box(g, 0.05, 0.5, 0.82, 0.8, 1.3, 0, GLASS); ws.rotation.z = -0.35;   // windscreen
-    box(g, 0.42, 0.34, 1.03, 0.3, 1.25, 0, GLASS); box(g, 0.5, 0.34, 1.03, -0.5, 1.25, 0, GLASS);   // side windows
+    box(g, 2.3, 0.12, 0.95, 0, 0.34, 0, DARK);
+    box(g, 1.9, 1.15, 1.0, -0.2, 0.98, 0, CORAL);
+    box(g, 0.5, 0.55, 1.0, 0.95, 0.68, 0, CORAL);
+    box(g, 1.92, 0.16, 1.02, -0.2, 0.78, 0, CREAM);
+    box(g, 1.5, 0.28, 0.9, -0.3, 1.7, 0, CREAM);
+    const ws = box(g, 0.05, 0.5, 0.82, 0.8, 1.3, 0, GLASS); ws.rotation.z = -0.35;
+    box(g, 0.42, 0.34, 1.03, 0.3, 1.25, 0, GLASS); box(g, 0.5, 0.34, 1.03, -0.5, 1.25, 0, GLASS);
     box(g, 0.06, 0.14, 0.2, 1.21, 0.78, 0.3, '#ffe08a', { emissive: '#ffcf55', emissiveIntensity: 0.6 });
     box(g, 0.06, 0.14, 0.2, 1.21, 0.78, -0.3, '#ffe08a', { emissive: '#ffcf55', emissiveIntensity: 0.6 });
-    box(g, 0.08, 0.1, 1.0, 1.2, 0.5, 0, CREAM);                          // bumper
+    box(g, 0.08, 0.1, 1.0, 1.2, 0.5, 0, CREAM);
     box(g, 0.05, 0.12, 0.16, -1.16, 0.85, 0.35, '#e8564a'); box(g, 0.05, 0.12, 0.16, -1.16, 0.85, -0.35, '#e8564a');
-    const rack = box(g, 1.3, 0.04, 0.7, -0.3, 1.88, 0, DARK);            // roof rack with a surfboard and a bag
+    const rack = box(g, 1.3, 0.04, 0.7, -0.3, 1.88, 0, DARK);
     const board = box(g, 1.5, 0.05, 0.26, -0.3, 1.95, 0.12, '#5ac8c8'); board.rotation.y = 0.05; rack.castShadow = false;
     box(g, 0.4, 0.2, 0.3, -0.6, 2.0, -0.18, '#e8b23a');
     [[-0.7, 0.52], [-0.7, -0.52], [0.75, 0.52], [0.75, -0.52]].forEach(([x, z]) => {
@@ -959,7 +923,7 @@ export async function createWorld(opts) {
       const m = new THREE.Mesh(geo('smoke', () => new THREE.IcosahedronGeometry(0.14, 0)), new THREE.MeshLambertMaterial({ color: '#efeaff', transparent: true, opacity: 0.5, flatShading: true }));
       fire.add(m); smoke.push({ m, off: i / 5 });
     }
-    [[-0.3, 1.0, 0.4], [1.9, 1.0, -0.5]].forEach(([a, r, ry]) => {      // log seats around the fire
+    [[-0.3, 1.0, 0.4], [1.9, 1.0, -0.5]].forEach(([a, r, ry]) => {
       const seat = cyl(fire, 0.17, 0.17, 0.55, 8, Math.cos(a) * r * 1.2, 0.17, Math.sin(a) * r * 1.2, '#a9714f'); seat.rotation.z = Math.PI / 2; seat.rotation.y = ry;
     });
     animators.push((dt, t) => {
@@ -981,12 +945,12 @@ export async function createWorld(opts) {
     cyl(g, 0.95, 0.72, 0.28, 6, 0, 1.92, 0, '#6c58cf');
     put(g, geo('dome', () => new THREE.SphereGeometry(0.62, 10, 6, 0, TAU, 0, Math.PI / 2)), mat('#8f7fe6'), 0, 2.05, 0);
     cyl(g, 0.03, 0.03, 1.0, 5, 0, 2.7, 0, '#d8d2ff');
-    for (let i = 0; i < 5; i++) {                       // glowing "code window" panels around the tower
+    for (let i = 0; i < 5; i++) {
       const a = (i / 5) * TAU + 0.3, y = 0.7 + (i % 2) * 0.5;
       const w = box(g, 0.05, 0.24, 0.34, Math.cos(a) * 0.72, y, Math.sin(a) * 0.72, '#9ff3ff', { emissive: '#4fd1e0', emissiveIntensity: 0.8 });
       w.rotation.y = -a; w.castShadow = false;
     }
-    box(g, 0.9, 0.05, 0.5, 1.5, 0.45, 0.5, '#2b2850').rotation.z = 0.3;   // solar panel
+    box(g, 0.9, 0.05, 0.5, 1.5, 0.45, 0.5, '#2b2850').rotation.z = 0.3;
     cyl(g, 0.03, 0.03, 0.4, 4, 1.5, 0.25, 0.5, '#d8d2ff');
 
     const crystal = new THREE.Group(); crystal.position.set(0, 3.45, 0); g.add(crystal);
@@ -1015,7 +979,7 @@ export async function createWorld(opts) {
       }
     });
     crops.castShadow = true; g.add(crops);
-    for (let i = 0; i < 9; i++) box(g, 0.07, 0.42, 0.07, -1.5 + i * 0.5, 0.21, 2.95, '#b9825f');     // fence in front of the farm
+    for (let i = 0; i < 9; i++) box(g, 0.07, 0.42, 0.07, -1.5 + i * 0.5, 0.21, 2.95, '#b9825f');
     box(g, 4.1, 0.05, 0.05, 0.5, 0.33, 2.95, '#c9966f'); box(g, 4.1, 0.05, 0.05, 0.5, 0.16, 2.95, '#c9966f');
 
     const mill = new THREE.Group(); mill.position.set(-2.6, 0, 0.3); g.add(mill);
@@ -1087,22 +1051,19 @@ export async function createWorld(opts) {
   const houseV1 = { value: null }, houseC1 = { value: null }, houseC2 = { value: null };
 
   await stage(0.6, 'Raising the city', () => {
-    // streets and pavements
     slab(W, 0, AVENUE_Z, 25, 1.7, '#3f3d66', 0.04, 0.06);
-    slab(W, 0, AVENUE_Z - 1.2, 25, 0.7, '#e4def7', 0.05, 0.06);        // north pavement
-    slab(W, 0, AVENUE_Z + 1.2, 25, 0.7, '#e4def7', 0.05, 0.06);        // south pavement
-    slab(W, 0, 24.9, 25, 1.7, '#7bd88f', 0.03, 0.06);                  // park lawn along the south side
+    slab(W, 0, AVENUE_Z - 1.2, 25, 0.7, '#e4def7', 0.05, 0.06);
+    slab(W, 0, AVENUE_Z + 1.2, 25, 0.7, '#e4def7', 0.05, 0.06);
+    slab(W, 0, 24.9, 25, 1.7, '#7bd88f', 0.03, 0.06);
     const dash = new THREE.InstancedMesh(geo('box', () => new THREE.BoxGeometry(1, 1, 1)), new THREE.MeshLambertMaterial({ color: '#fff1dc' }), 24);
     const d0 = new THREE.Object3D();
     for (let i = 0; i < 24; i++) { d0.position.set(-11 + i * 0.96, 0.08, AVENUE_Z); d0.scale.set(0.45, 0.012, 0.07); d0.updateMatrix(); dash.setMatrixAt(i, d0.matrix); }
     W.add(dash);
 
-    // houses people can walk into
-    houseV1.value = makeHouse(-1.4, 10.8, Math.PI, '#ffe08a', '#e8564a');          // village house, door faces north to the road
-    houseC1.value = makeHouse(1.5, 19.3, 0, '#ffb3c7', '#6c58cf');                 // city houses, doors face the avenue
+    houseV1.value = makeHouse(-1.4, 10.8, Math.PI, '#ffe08a', '#e8564a');
+    houseC1.value = makeHouse(1.5, 19.3, 0, '#ffb3c7', '#6c58cf');
     houseC2.value = makeHouse(4.2, 19.3, 0, '#9ff3ff', '#ff6b5e');
 
-    // window texture for towers
     const winTex = canvasTexture((g, s) => {
       g.fillStyle = '#dcd6f5'; g.fillRect(0, 0, s, s);
       g.fillStyle = '#6ad0ff'; g.fillRect(34, 30, 60, 68);
@@ -1123,19 +1084,17 @@ export async function createWorld(opts) {
     makeTower(1.0, 16.2, 2.0, 2.0, 6.4, '#cdbff5', '#4b3fa6');
     makeTower(3.9, 16.5, 2.2, 2.0, 4.6, '#bff0ee', '#2b2850');
     makeTower(10.2, 16.8, 2.6, 2.4, 3.8, '#ffd0de', '#6c58cf');
-    cyl(W, 0.03, 0.04, 1.2, 5, 1.0, 7.3, 16.2, '#d8d2ff');                          // antenna on the tallest tower
+    cyl(W, 0.03, 0.04, 1.2, 5, 1.0, 7.3, 16.2, '#d8d2ff');
     ball(W, 0.08, 1.0, 7.95, 16.2, '#ff6b5e', { emissive: '#ff6b5e', emissiveIntensity: 1 });
 
-    // cafe
     const cafe = new THREE.Group(); cafe.position.set(10.2, 0, 20.1); W.add(cafe);
     box(cafe, 2.2, 1.3, 1.6, 0, 0.65, 0, '#ffe08a');
     box(cafe, 2.4, 0.12, 1.8, 0, 1.36, 0, '#8a5a44');
-    box(cafe, 2.2, 0.1, 0.55, 0, 1.0, 1.05, '#ff6b5e').rotation.x = 0.35;           // awning
+    box(cafe, 2.2, 0.1, 0.55, 0, 1.0, 1.05, '#ff6b5e').rotation.x = 0.35;
     box(cafe, 0.5, 0.8, 0.04, 0.5, 0.4, 0.82, '#6c58cf');
     box(cafe, 0.8, 0.5, 0.04, -0.55, 0.65, 0.82, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.35 });
-    box(cafe, 0.9, 0.22, 0.04, 0, 1.2, 0.83, '#241f4d');                            // cafe sign
+    box(cafe, 0.9, 0.22, 0.04, 0, 1.2, 0.83, '#241f4d');
 
-    // cars driving along the avenue
     function makeCar(color) {
       const c = new THREE.Group();
       box(c, 0.95, 0.24, 0.46, 0, 0.24, 0, color);
@@ -1160,7 +1119,6 @@ export async function createWorld(opts) {
       c.g.scale.setScalar(Math.max(0.001, Math.min(1, (12 - Math.abs(c.x)) / 1.5)));
     }));
 
-    // park: round trees, benches, flower beds
     [-9.5, -6.5, -2.8, 0.3, 7.0, 9.8].forEach((x, i) => {
       const t = new THREE.Group(); t.position.set(x, 0, 25.0); W.add(t);
       cyl(t, 0.07, 0.1, 0.7, 6, 0, 0.35, 0, '#8a5a44');
@@ -1176,7 +1134,6 @@ export async function createWorld(opts) {
       for (let k = 0; k < 6; k++) ball(W, 0.07, x - 0.4 + k * 0.16, 0.22, z + ((k % 2) - 0.5) * 0.14, ['#ff6b5e', '#ffe08a', '#ff9fb8'][(k + i) % 3]);
     });
 
-    // lamp posts on the avenue and along the long road
     [-9, -3.5, 2.5, 9].forEach((x) => addLamp(x, AVENUE_Z + 1.35));
     [0.12, 0.24, 0.36, 0.48, 0.6, 0.72, 0.84].forEach((u, i) => {
       const p = roadCurve.getPointAt(u), tg = roadCurve.getTangentAt(u), sd = i % 2 ? 1.5 : -1.5;
@@ -1188,32 +1145,135 @@ export async function createWorld(opts) {
   });
 
   /* ---------------------------------------------------------------- */
-  /* 7. project office buildings: Astropulse SMM + HealthGIS             */
+  /* 6.5 the airport                                                   */
   /* ---------------------------------------------------------------- */
-  const HQ = { x: -6.0, z: 18.0 };                    // Astropulse SMM
-  const HQ2 = { x: -15.5, z: 7.5 };                   // HealthGIS (site.je)
-  const FLOOR = 0.14;                                 // floor height inside an office
+  await stage(0.63, 'Building the airport', () => {
+    const RUNWAY_Z = AIRPORT.z1 - 6.0;
+    const RX0 = AIRPORT.x0 + 1.2, RX1 = AIRPORT.x1 - 5.0;
 
-  /* buildOfficeHQ(o): one project's office building — glass ground floor, two upper
-     floors of desks, a tower with a project sign, a courtyard, a sliding gate and a
-     guard booth. Astropulse SMM and HealthGIS are both built from this, just with
-     different positions, brand colours and desk-screen colours. Returns { H, gate }
-     so the agents section below can seat employees in it and open its gate.     */
+    slab(W, (RX0 + RX1) / 2, RUNWAY_Z, RX1 - RX0 + 2.6, 4.3, '#5fda8a', 0.02, 0.04);
+    slab(W, (RX0 + RX1) / 2, RUNWAY_Z, RX1 - RX0 + 2, 3.6, '#4a4766', 0.035, 0.06);
+    const dashN = 14, rd = new THREE.InstancedMesh(geo('box', () => new THREE.BoxGeometry(1, 1, 1)), new THREE.MeshLambertMaterial({ color: '#fff1dc' }), dashN);
+    const dd = new THREE.Object3D();
+    for (let i = 0; i < dashN; i++) {
+      dd.position.set(RX0 + 0.5 + i * ((RX1 - RX0 - 1) / (dashN - 1)), 0.07, RUNWAY_Z);
+      dd.scale.set(0.5, 0.012, 0.1); dd.updateMatrix(); rd.setMatrixAt(i, dd.matrix);
+    }
+    W.add(rd);
+    slab(W, RX1 + 2.0, AIRPORT.z1 - 2.0, 4.2, 3.6, '#8a84b8', 0.03, 0.06);
+
+    const term = new THREE.Group(); term.position.set(RX1 + 2.2, 0, AIRPORT.z1 + 0.2); W.add(term);
+    box(term, 4.4, 1.3, 2.0, 0, 0.65, 0, '#eae6ff');
+    box(term, 4.6, 0.12, 2.2, 0, 1.36, 0, '#4b3fa6');
+    box(term, 4.0, 0.9, 0.04, 0, 0.75, -1.0, '#bfe4ff', { transparent: true, opacity: 0.35, depthWrite: false }).castShadow = false;
+    box(term, 0.9, 0.22, 0.04, 0, 1.15, -1.02, '#241f4d');
+    const ctrl = new THREE.Group(); ctrl.position.set(1.6, 0, 0.6); term.add(ctrl);
+    cyl(ctrl, 0.3, 0.42, 2.6, 8, 0, 1.3, 0, '#8a84b8');
+    cyl(ctrl, 0.55, 0.55, 0.6, 8, 0, 2.9, 0, '#4fd1e0', { emissive: '#2a9aa8', emissiveIntensity: 0.3 });
+    const beacon = ball(ctrl, 0.1, 0, 3.3, 0, '#ff4d4d', { emissive: '#ff2d2d', emissiveIntensity: 1 }); beacon.castShadow = false;
+    const beaconGlow = glow(ctrl, 0xff4d4d, 1.3, 0.6, 0, 3.3, 0);
+
+    const sock = new THREE.Group(); sock.position.set(RX0 - 0.6, 0, RUNWAY_Z + 2.4); W.add(sock);
+    cyl(sock, 0.03, 0.03, 1.6, 6, 0, 0.8, 0, '#8a84b8');
+    const cloth = cone(sock, 0.16, 0.6, 8, 0, 1.55, 0, '#ff6b5e'); cloth.rotation.z = Math.PI / 2;
+
+    const plane = new THREE.Group(); W.add(plane);
+    const fuse = cyl(plane, 0.16, 0.2, 2.0, 10, 0, 0.5, 0, '#fff8ec'); fuse.rotation.z = Math.PI / 2;
+    cone(plane, 0.16, 0.5, 10, 1.2, 0.5, 0, '#fff8ec').rotation.z = -Math.PI / 2;
+    box(plane, 0.04, 0.18, 1.9, -0.1, 0.72, 0, '#8f7fe6');
+    box(plane, 0.04, 0.5, 0.5, -0.85, 0.72, 0, '#8f7fe6');
+    box(plane, 1.9, 0.05, 0.3, 0.1, 0.46, 0, '#8f7fe6');
+    [0.55, -0.55].forEach((wz) => { cyl(plane, 0.06, 0.06, 0.3, 8, 0.3, 0.3, wz, '#2b2850').rotation.x = Math.PI / 2; });
+    box(plane, 0.5, 0.1, 0.16, 0.9, 0.56, 0, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.3 });
+    const taxi = { d: 0.2, dir: 1 };
+    animators.push((dt, t) => {
+      taxi.d += taxi.dir * 0.9 * dt;
+      if (taxi.d > 0.92) taxi.dir = -1; else if (taxi.d < 0.08) taxi.dir = 1;
+      const x = lerp(RX0 + 0.6, RX1 - 0.6, taxi.d);
+      plane.position.set(x, 0.05, RUNWAY_Z);
+      plane.rotation.y = taxi.dir > 0 ? 0 : Math.PI;
+      beaconGlow.material.opacity = 0.4 + (Math.sin(t * 6) > 0.6 ? 0.5 : 0);
+      beacon.visible = Math.sin(t * 6) > 0;
+    });
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* 6.6 the railway                                                   */
+  /* ---------------------------------------------------------------- */
+  const RAIL_Z = [RAIL.z0 + 1.6, RAIL.z0 + 2.6];
+  let trainGroup = null, trainRun = null;
+  await stage(0.65, 'Laying the railway', () => {
+    slab(W, (RAIL.x0 + RAIL.x1) / 2, (RAIL.z0 + RAIL.z1) / 2, RAIL.x1 - RAIL.x0 + 1, RAIL.z1 - RAIL.z0 + 1, '#9c966f', 0.02, 0.05);
+
+    RAIL_Z.forEach((tz) => {
+      slab(W, (RAIL.x0 + RAIL.x1) / 2, tz, RAIL.x1 - RAIL.x0 - 1, 0.5, '#6a644a', 0.03, 0.05);
+      [-0.19, 0.19].forEach((ro) => slab(W, (RAIL.x0 + RAIL.x1) / 2, tz + ro, RAIL.x1 - RAIL.x0 - 1, 0.045, '#8a84b8', 0.05, 0.04));
+      const nSleep = 18;
+      for (let i = 0; i < nSleep; i++) {
+        const x = RAIL.x0 + 0.8 + i * ((RAIL.x1 - RAIL.x0 - 1.6) / (nSleep - 1));
+        box(W, 0.14, 0.03, 0.5, x, 0.03, tz, '#8a5a44').castShadow = false;
+      }
+    });
+
+    const platZ = RAIL_Z[0] - 1.1;
+    slab(W, (RAIL.x0 + RAIL.x1) / 2 - 1, platZ, RAIL.x1 - RAIL.x0 - 3, 1.5, '#e4def7', 0.08, 0.16);
+
+    const st = new THREE.Group(); st.position.set(RAIL.x0 + 2.6, 0, platZ - 1.1); W.add(st);
+    box(st, 2.6, 1.0, 1.4, 0, 0.5, 0, '#fff1dc');
+    box(st, 2.9, 0.1, 1.9, 0, 1.05, 0.1, '#4fae7a');
+    box(st, 0.5, 0.7, 0.03, -0.6, 0.35, 0.72, '#6c58cf');
+    box(st, 0.8, 0.5, 0.04, 0.5, 0.65, 0.72, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.3 });
+    box(st, 1.1, 0.26, 0.05, 0, 1.12, 0.6, '#241f4d');
+    [-0.1, 2.1].forEach((x) => cyl(st, 0.04, 0.04, 1.2, 6, x, 0.6, 0.95, '#8a84b8'));
+    [[1.8, 0.4], [1.8, -0.35]].forEach(([x, z]) => {
+      box(st, 0.7, 0.05, 0.28, x, 0.3, z, '#c9966f'); box(st, 0.7, 0.3, 0.04, x, 0.46, z - 0.13, '#2b2850');
+    });
+
+    const tg = new THREE.Group(); W.add(tg); trainGroup = tg;
+    function carriage(x, color, loco) {
+      const c = new THREE.Group(); c.position.x = x; tg.add(c);
+      box(c, 1.6, 0.55, 0.78, 0, 0.5, 0, color);
+      box(c, 1.6, 0.14, 0.82, 0, 0.82, 0, '#241f4d');
+      if (loco) { box(c, 0.3, 0.3, 0.86, 0.8, 0.95, 0, '#241f4d'); box(c, 0.1, 0.12, 0.3, 0.95, 1.0, 0, '#ffe08a', { emissive: '#ffd36e', emissiveIntensity: 1 }); }
+      for (let i = -1; i <= 1; i += 2) box(c, 0.3, 0.2, 0.03, i * 0.5, 0.6, 0.4, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.25 });
+      [[-0.5, 0.41], [0.5, 0.41], [-0.5, -0.41], [0.5, -0.41]].forEach(([wx, wz]) => { const w = cyl(c, 0.14, 0.14, 0.08, 10, wx, 0.14, wz, '#2b2850'); w.rotation.x = Math.PI / 2; });
+      return c;
+    }
+    carriage(0.9, '#ff6b5e', true); carriage(-0.9, '#5ac8c8', false); carriage(-2.6, '#8f7fe6', false);
+    trainRun = { x: RAIL.x0 + 3, dir: 1 };
+    const trackZ = RAIL_Z[1];
+    animators.push((dt) => {
+      trainRun.x += trainRun.dir * 2.0 * dt;
+      if (trainRun.x > RAIL.x1 - 3) trainRun.dir = -1; else if (trainRun.x < RAIL.x0 + 3) trainRun.dir = 1;
+      tg.position.set(trainRun.x, 0.05, trackZ); tg.rotation.y = trainRun.dir > 0 ? 0 : Math.PI;
+    });
+
+    const passenger = makePerson({ shirt: '#e8b23a', pants: '#2b2850', hair: '#7a4a32', skin: '#f6d2b4', hairStyle: 'pony', shoes: '#8a5a44' });
+    makeAgent(passenger, W, { x: RAIL.x0 + 4.5, z: platZ - 1.1 + 0.4, face: [0, -1], ground: () => 0, steps: [{ wait: Infinity, pose: 'sit' }] });
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* 7. project office buildings                                       */
+  /* ---------------------------------------------------------------- */
+  const HQ = { x: -6.0, z: 18.0 };
+  const HQ2 = { x: -15.5, z: 7.5 };
+  const HQ3 = { x: 24.0, z: -4.0 };
+  const FLOOR = 0.14;
+
   function buildOfficeHQ(o) {
-
     const H = new THREE.Group(); H.position.set(o.x, 0, o.z); W.add(H);
-    const gate = { pos: 0, target: 0 };                // this building's own sliding gate (0 = closed, 1 = open)
-    const bx = (sx, sy, sz, x, y, z, c, o) => box(H, sx, sy, sz, x, y, z, c, o);
+    const gate = { pos: 0, target: 0 };
+    const myMonitors = [];                              // only THIS office's screens
+    const bx = (sx, sy, sz, x, y, z, c, opt) => box(H, sx, sy, sz, x, y, z, c, opt);
     const glass = (sx, sy, sz, x, y, z) => { const m = bx(sx, sy, sz, x, y, z, '#bfe4ff', { transparent: true, opacity: 0.2, depthWrite: false }); m.castShadow = false; return m; };
 
-    // the sign
     const signTex = canvasTextureWH(1024, 176, (g, w, h) => {
       const gr = g.createLinearGradient(0, 0, w, 0); gr.addColorStop(0, '#241f4d'); gr.addColorStop(1, o.tower);
       g.fillStyle = gr; g.fillRect(0, 0, w, h);
       g.fillStyle = o.accent; g.beginPath(); g.arc(88, h / 2, 54, 0, TAU); g.fill();
       g.strokeStyle = '#ffffff'; g.lineWidth = 8; g.lineCap = 'round'; g.lineJoin = 'round'; g.beginPath();
       [[52, 90], [72, 90], [82, 52], [96, 124], [106, 90], [124, 90]].forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
-      g.stroke();                                                                  // the "pulse" in the logo
+      g.stroke();
       let fs = 86; g.textBaseline = 'middle'; g.font = `800 ${fs}px system-ui, "Segoe UI", Arial, sans-serif`;
       const full = () => g.measureText(o.nameA + ' ' + o.nameB).width;
       while (full() > w - 210 && fs > 40) { fs -= 4; g.font = `800 ${fs}px system-ui, "Segoe UI", Arial, sans-serif`; }
@@ -1224,12 +1284,10 @@ export async function createWorld(opts) {
     });
     const signMat = new THREE.MeshBasicMaterial({ map: signTex, fog: false });
 
-    // courtyard ground, lawns, path
     slab(H, 0, 0.1, 9.8, 6.8, '#e4def7', 0.02, 0.04);
     slab(H, -3.3, 1.9, 2.2, 1.9, '#7bd88f', 0.05, 0.04); slab(H, 3.3, 1.9, 2.2, 1.9, '#7bd88f', 0.05, 0.04);
     slab(H, 0, 2.0, 1.5, 3.0, '#c9c2ea', 0.05, 0.04);
 
-    // fence
     const fence = (x0, z0, x1, z1) => {
       const len = Math.hypot(x1 - x0, z1 - z0), n = Math.max(1, Math.round(len / 0.75)), ang = -Math.atan2(z1 - z0, x1 - x0);
       for (let i = 0; i <= n; i++) { const f = i / n; bx(0.07, 0.5, 0.07, x0 + (x1 - x0) * f, 0.27, z0 + (z1 - z0) * f, '#fff1dc'); }
@@ -1237,59 +1295,55 @@ export async function createWorld(opts) {
     };
     fence(-4.8, -3.2, -4.8, 3.2); fence(4.8, -3.2, 4.8, 3.2); fence(-4.8, 3.2, -1.2, 3.2); fence(1.2, 3.2, 4.8, 3.2);
 
-    /* ---- the building: glass ground floor, two solid floors, a tower ---- */
-    bx(7.6, 0.12, 3.9, 0, 0.06, -1.2, o.wallTint);                                   // floor slab
-    bx(7.2, 0.02, 3.4, 0, 0.13, -1.2, o.wallTint).castShadow = false;                // carpet
-    bx(7.4, 1.3, 0.12, 0, 0.8, -3.0, o.wallTint);                                    // back wall
-    glass(7.3, 1.1, 0.03, 0, 0.75, 0.58);                                           // front glass
+    bx(7.6, 0.12, 3.9, 0, 0.06, -1.2, o.wallTint);
+    bx(7.2, 0.02, 3.4, 0, 0.13, -1.2, o.wallTint).castShadow = false;
+    bx(7.4, 1.3, 0.12, 0, 0.8, -3.0, o.wallTint);
+    glass(7.3, 1.1, 0.03, 0, 0.75, 0.58);
     glass(0.03, 1.1, 3.5, -3.7, 0.75, -1.2); glass(0.03, 1.1, 3.5, 3.7, 0.75, -1.2);
-    bx(0.9, 1.05, 0.05, 0, 0.7, 0.6, o.accent, { transparent: true, opacity: 0.35, depthWrite: false }).castShadow = false;   // glass door
+    bx(0.9, 1.05, 0.05, 0, 0.7, 0.6, o.accent, { transparent: true, opacity: 0.35, depthWrite: false }).castShadow = false;
     for (let i = 0; i < 5; i++) bx(0.16, 1.3, 0.16, -3.65 + i * 1.825, 0.79, 0.58, '#fff8ec');
-    bx(7.8, 0.14, 4.0, 0, 1.38, -1.2, '#fff8ec');                                   // ceiling / floor above
-    bx(1.4, 0.08, 0.6, 0, 0.04, 0.95, '#d8d2ff');                                   // entrance step
+    bx(7.8, 0.14, 4.0, 0, 1.38, -1.2, '#fff8ec');
+    bx(1.4, 0.08, 0.6, 0, 0.04, 0.95, '#d8d2ff');
     [-2.4, 0, 2.4].forEach((x) => bx(1.2, 0.04, 0.2, x, 1.34, -1.2, '#fffbe8', { emissive: '#fff3b0', emissiveIntensity: 0.9 }).castShadow = false);
 
-    bx(7.4, 0.9, 3.5, 0, 1.9, -1.25, o.wallTint);                                    // floor 2
+    bx(7.4, 0.9, 3.5, 0, 1.9, -1.25, o.wallTint);
     bx(7.5, 0.06, 3.6, 0, 2.37, -1.25, o.accent);
     [-2.7, -1.35, 0, 1.35, 2.7].forEach((x) => bx(0.9, 0.5, 0.03, x, 1.9, 0.52, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.45 }));
     [-2.2, -0.9].forEach((z) => { bx(0.03, 0.5, 0.9, -3.71, 1.9, z, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.45 }); bx(0.03, 0.5, 0.9, 3.71, 1.9, z, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.45 }); });
-    bx(6.0, 0.8, 3.1, 0, 2.78, -1.45, '#2b2850');                                   // floor 3 (carries the sign)
+    bx(6.0, 0.8, 3.1, 0, 2.78, -1.45, '#2b2850');
     const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 0.534), signMat); sign.position.set(0, 2.78, 0.14); H.add(sign);
     bx(6.2, 0.1, 3.3, 0, 3.22, -1.45, '#3a2f5b');
-    bx(2.6, 2.0, 2.4, 0, 4.27, -1.7, o.tower);                                    // tower
+    bx(2.6, 2.0, 2.4, 0, 4.27, -1.7, o.tower);
     [3.7, 4.3, 4.9].forEach((y) => [-0.85, 0, 0.85].forEach((x) => bx(0.4, 0.34, 0.03, x, y, -0.48, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.7 })));
     bx(2.8, 0.12, 2.6, 0, 5.33, -1.7, '#241f4d');
     cyl(H, 0.04, 0.05, 1.0, 6, 0, 5.9, -1.7, '#d8d2ff');
     const orb = ball(H, 0.2, 0, 6.5, -1.7, o.accent, { emissive: o.accent, emissiveIntensity: 1 }); orb.castShadow = false;
-    const orbGlow = glow(H, 0xff4fa3, 3.4, 0.7, 0, 6.5, -1.7);
-    const pulses = [0, 1].map((i) => {                                              // pulse rings: the "Astropulse" heartbeat
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: ringTex, color: 0xff7fc0, transparent: true, depthWrite: false, fog: false }));
+    const orbGlow = glow(H, new THREE.Color(o.accent), 3.4, 0.7, 0, 6.5, -1.7);        // brand colour, not always pink
+    const pulses = [0, 1].map((i) => {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: ringTex, color: new THREE.Color(o.accentLight), transparent: true, depthWrite: false, fog: false }));
       s.position.set(0, 6.5, -1.7); H.add(s); return { s, off: i / 2 };
     });
 
-    // inside: wall posters, whiteboard, coffee corner
     [[-2.6, o.accent], [-1.4, o.accent2], [-0.2, '#ffe08a']].forEach(([x, c]) => bx(0.55, 0.38, 0.02, x, 1.0, -2.93, c, { emissive: c, emissiveIntensity: 0.25 }));
     bx(1.5, 0.8, 0.04, 3.0, 0.9, -2.93, '#ffffff');
     [[o.accent, 0.5, 1.12], [o.accent2, 0.9, 1.0], ['#8f7fe6', 0.7, 0.88]].forEach(([c, w, y]) => bx(w, 0.04, 0.02, 2.8, y, -2.9, c));
     bx(0.5, 0.6, 0.4, 3.35, 0.44, -0.55, '#2b2850'); bx(0.4, 0.2, 0.3, 3.35, 0.84, -0.55, o.accent);
 
-    // desks (people sit at x, facing -x; the desk is in front of them)
     const DESK_X = [-2.6, -1.1, 0.4, 1.9], screenColors = o.deskColors;
     DESK_X.forEach((x, i) => {
       const z = -1.55;
       bx(0.5, 0.04, 1.0, x - 0.62, FLOOR + 0.64, z, '#fff8ec');
       bx(0.05, 0.62, 0.05, x - 0.4, FLOOR + 0.32, z + 0.42, '#8a84b8'); bx(0.05, 0.62, 0.05, x - 0.4, FLOOR + 0.32, z - 0.42, '#8a84b8');
       bx(0.05, 0.62, 0.05, x - 0.84, FLOOR + 0.32, z + 0.42, '#8a84b8'); bx(0.05, 0.62, 0.05, x - 0.84, FLOOR + 0.32, z - 0.42, '#8a84b8');
-      bx(0.05, 0.3, 0.46, x - 0.8, FLOOR + 0.83, z, '#241f4d');                      // monitor
+      bx(0.05, 0.3, 0.46, x - 0.8, FLOOR + 0.83, z, '#241f4d');
       const sm = new THREE.MeshLambertMaterial({ color: screenColors[i], emissive: screenColors[i], emissiveIntensity: 0.8 });
-      monitorMats.push(sm);
+      myMonitors.push(sm); monitorMats.push(sm);
       const scr = new THREE.Mesh(geo('box', () => new THREE.BoxGeometry(1, 1, 1)), sm); scr.scale.set(0.012, 0.24, 0.4); scr.position.set(x - 0.77, FLOOR + 0.84, z); H.add(scr);
-      bx(0.18, 0.02, 0.34, x - 0.45, FLOOR + 0.67, z, '#2b2850');                    // keyboard
-      bx(0.34, 0.05, 0.34, x + 0.06, FLOOR + 0.36, z, '#2b2850');                    // chair seat
-      bx(0.05, 0.42, 0.34, x + 0.22, FLOOR + 0.58, z, '#2b2850');                    // chair back
+      bx(0.18, 0.02, 0.34, x - 0.45, FLOOR + 0.67, z, '#2b2850');
+      bx(0.34, 0.05, 0.34, x + 0.06, FLOOR + 0.36, z, '#2b2850');
+      bx(0.05, 0.42, 0.34, x + 0.22, FLOOR + 0.58, z, '#2b2850');
     });
 
-    /* ---- the sliding gate, posts, lamps, sign ---- */
     [-1.05, 1.05].forEach((x) => bx(0.2, 1.0, 0.2, x, 0.52, 3.2, '#fff1dc'));
     bx(2.3, 0.1, 0.12, 0, 1.05, 3.2, '#3a2f5b');
     const gateSign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.275), signMat); gateSign.position.set(0, 1.28, 3.28); H.add(gateSign);
@@ -1305,7 +1359,6 @@ export async function createWorld(opts) {
     const lampGreen = ball(H, 0.08, -1.05, 1.2, 3.3, '#5dff9a', { emissive: '#2dff7a', emissiveIntensity: 1 }); lampGreen.castShadow = false;
     const lampGlow = glow(H, 0xff4d4d, 0.9, 0.6, -1.05, 1.2, 3.3);
 
-    // guard booth, planters
     bx(0.9, 0.95, 0.85, 2.45, 0.48, 2.65, '#fff1dc');
     bx(1.1, 0.08, 1.05, 2.45, 1.0, 2.65, o.accent);
     glass(0.03, 0.5, 0.6, 2.0, 0.62, 2.65);
@@ -1320,14 +1373,14 @@ export async function createWorld(opts) {
       const open = gate.target > 0.5;
       lampRed.visible = !open; lampGreen.visible = open;
       lampGlow.material.color.set(open ? 0x5dff9a : 0xff4d4d);
-      monitorMats.forEach((m, i) => { m.emissiveIntensity = 0.7 + Math.sin(t * 5 + i * 2) * 0.1 + (Math.sin(t * 17 + i) > 0.92 ? 0.25 : 0); });
+      myMonitors.forEach((m, i) => { m.emissiveIntensity = 0.7 + Math.sin(t * 5 + i * 2) * 0.1 + (Math.sin(t * 17 + i) > 0.92 ? 0.25 : 0); });
       orbGlow.material.opacity = 0.55 + Math.sin(t * 3) * 0.2;
       pulses.forEach((p) => { const k = (t * 0.55 + p.off) % 1; p.s.scale.setScalar(0.6 + k * 3.4); p.s.material.opacity = (1 - k) * 0.8; });
     });
     return { H, gate };
   }
 
-  let astropulseHQ, healthgisHQ;
+  let astropulseHQ, healthgisHQ, nexoraHQ;
   await stage(0.68, 'Building the project offices', () => {
     astropulseHQ = buildOfficeHQ({
       x: HQ.x, z: HQ.z, nameA: 'ASTROPULSE', nameB: 'SMM', accent: '#ff4fa3', accentLight: '#ff6fb5',
@@ -1342,6 +1395,13 @@ export async function createWorld(opts) {
       deskColors: ['#bfe3ff', '#b7ffe6', '#fff0b3', '#d8ffcf'],
     });
     hq2Group = healthgisHQ.H;
+
+    nexoraHQ = buildOfficeHQ({
+      x: HQ3.x, z: HQ3.z, nameA: 'NEXORA', nameB: 'AI', accent: '#8f7fe6', accentLight: '#b3a4ff',
+      accent2: '#5ac8c8', tower: '#4b3fa6', wallTint: '#ece9ff',
+      deskColors: ['#c9bfff', '#9ff3ff', '#ffe08a', '#ff9fb8'],
+    });
+    hq3Group = nexoraHQ.H;
   });
 
   /* ---------------------------------------------------------------- */
@@ -1352,13 +1412,12 @@ export async function createWorld(opts) {
   const hqGround = (x, z) => (Math.abs(x) < 3.6 && z < 0.5 && z > -3.0 ? FLOOR : 0.045);
   const reversed = (list) => list.slice().reverse();
   const goList = (pts) => pts.map((p) => ({ go: p }));
+  function DESK_X0(i) { return [-2.6, -1.1, 0.4, 1.9][i]; }
 
   await stage(0.8, 'Waking up the villagers', () => {
-    /* --- the storyteller by the fire: BOTH hands move while he talks --- */
     const me = makePerson({ shirt: '#ff6b5e', pants: '#2b2850', hair: '#241f4d', backpack: '#e8b23a', skin: '#e9b48d', shoes: '#fff8ec' });
     makeAgent(me, W, { x: -4.5, z: 7.4, heading: -Math.PI / 3, ground: () => 0, steps: [{ wait: Infinity, pose: 'talk' }] });
 
-    /* --- the villager: leaves home, walks to the mailbox, checks it, walks back, goes inside --- */
     const v1 = houseV1.value, mailStand = [9.7, 7.0];
     const outward = [v1.frontPt, ...roadPath(v1.frontPt[0], v1.frontPt[1], 8.6, 7.4, 0.35, 3), mailStand];
     const villager = makePerson({ shirt: '#8f7fe6', pants: '#3a3568', hair: '#7a4a32', backpack: '#ff6b5e', skin: '#f6d2b4', hairStyle: 'pony', shoes: '#8a5a44' });
@@ -1379,7 +1438,6 @@ export async function createWorld(opts) {
       ],
     });
 
-    /* --- the farmer: hoes his crop beds, row after row --- */
     const farmer = makePerson({ shirt: '#4fae7a', pants: '#6c58cf', hair: '#5a3b2a', hat: 'straw', skin: '#d9a07a', shoes: '#8a5a44' });
     const hoe = new THREE.Group(); farmer.elbowR.add(hoe); hoe.rotation.z = -0.3;
     cyl(hoe, 0.015, 0.015, 0.8, 5, 0.04, -0.34, 0, '#8a5a44'); box(hoe, 0.05, 0.05, 0.2, 0.04, -0.74, 0, '#9a9ab8');
@@ -1395,7 +1453,6 @@ export async function createWorld(opts) {
       ],
     });
 
-    /* --- the fisher at the pond --- */
     const fisher = makePerson({ shirt: '#4fd1e0', pants: '#6a5a45', hair: '#2b2850', hat: 'straw', hatColor: '#4b3fa6', skin: '#e0a98a', longSleeve: true, shoes: '#8a5a44' });
     const rod = cyl(fisher.group, 0.012, 0.02, 1.6, 6, 0.65, 0.95, 0.05, '#8a5a44'); rod.rotation.z = -1.0; rod.castShadow = false;
     cyl(fisher.group, 0.004, 0.004, 0.95, 4, 1.38, 0.6, 0.05, '#ffffff').castShadow = false;
@@ -1403,19 +1460,18 @@ export async function createWorld(opts) {
     makeAgent(fisher, W, { x: -3.35, z: 0.5, face: [-1, -0.05], ground: terrainH, steps: [{ wait: Infinity, pose: 'fish' }] });
     animators.push((dt, t) => { bobber.position.y = 0.62 + Math.sin(t * 2.2) * 0.012; rod.rotation.z = -1.0 + Math.sin(t * 0.7) * 0.02; });
 
-    /* --- the student by the school --- */
     const student = makePerson({ shirt: '#ffe08a', pants: '#4b3fa6', hair: '#241f4d', hairStyle: 'pony', backpack: '#5ac8c8', skin: '#e9b48d', shorts: true, shoes: '#ff6b5e' });
     student.group.scale.setScalar(0.9);
     makeAgent(student, W, { x: -8.3, z: -2.6, face: [0.5, 1], ground: terrainH, steps: [{ wait: Infinity, pose: 'wave' }] });
 
-    /* --- the cyclist: rides the long road, FALLS DOWN, gets up, dusts off, rides on --- */
+    /* --- the cyclist: rides, FALLS DOWN, gets up, dusts off, rides on --- */
     const bikeRoot = new THREE.Group(), tilt = new THREE.Group(); W.add(bikeRoot); bikeRoot.add(tilt);
     const wheelGeo = geo('wheel', () => new THREE.TorusGeometry(0.28, 0.035, 6, 16)), wm = mat('#2b2850');
     const wf = put(tilt, wheelGeo, wm, 0.42, 0.3, 0), wr = put(tilt, wheelGeo, wm, -0.42, 0.3, 0);
     box(tilt, 0.75, 0.04, 0.04, 0, 0.5, 0, '#ff6b5e'); box(tilt, 0.04, 0.4, 0.04, -0.18, 0.4, 0, '#ff6b5e');
     box(tilt, 0.04, 0.45, 0.04, 0.4, 0.45, 0, '#ff6b5e').rotation.z = -0.25;
     box(tilt, 0.04, 0.04, 0.34, 0.43, 0.7, 0, '#2b2850'); box(tilt, 0.2, 0.05, 0.12, -0.2, 0.62, 0, '#2b2850');
-    const rider = makePerson({ shirt: '#4fae7a', pants: '#2b2850', hair: '#e8b23a', skin: '#c98e68', hairStyle: 'long', shoes: '#ff6b5e', hat: undefined });
+    const rider = makePerson({ shirt: '#4fae7a', pants: '#2b2850', hair: '#e8b23a', skin: '#c98e68', hairStyle: 'long', shoes: '#ff6b5e' });
     const SEAT = [-0.18, 0.25, 0];
     rider.group.position.set(...SEAT); rider.group.scale.setScalar(0.92); tilt.add(rider.group);
     const L = roadCurve.getLength();
@@ -1448,7 +1504,7 @@ export async function createWorld(opts) {
           setJ(rider, { up: -0.3, alz: 1.0, arz: 1.0, elz: 0.1, erz: 0.1, ll: 0.5 + Math.sin(pedal) * 0.6, lr: 0.5 + Math.sin(pedal + Math.PI) * 0.6,
             sl: -(0.5 + 0.5 * Math.sin(pedal)), sr: -(0.5 + 0.5 * Math.sin(pedal + Math.PI)), hy: Math.sin(t * 0.7) * 0.15 });
           tilt.rotation.x = Math.sin(t * 2) * 0.01;
-          if (ride.timer > 11) {                                                  // OOPS: time to fall
+          if (ride.timer > 11) {
             ride.phase = 'fall'; ride.t = 0; ride.v = 1.7;
             tilt.remove(Rg); bikeRoot.add(Rg); Rg.position.set(...SEAT);
           }
@@ -1474,7 +1530,7 @@ export async function createWorld(opts) {
           if (ride.t >= 1.2) { ride.phase = 'dust'; ride.t = 0; }
           break;
         }
-        case 'dust':                                                              // shakes his head and brushes himself off
+        case 'dust':
           setJ(rider, { hy: Math.sin(t * 10) * 0.5, alz: 0.4 + Math.sin(t * 14) * 0.4, arz: 0.4 - Math.sin(t * 14) * 0.4, elz: 0.9, erz: 0.9 });
           if (ride.t >= 1.4) { ride.phase = 'remount'; ride.t = 0; }
           break;
@@ -1494,7 +1550,6 @@ export async function createWorld(opts) {
     });
     bikeRoot.position.set(-12, 0.05, 3);
 
-    /* --- city residents: leave their houses, walk, go back in --- */
     const c1 = houseC1.value, c2 = houseC2.value;
     const res1 = makePerson({ shirt: '#ff9f43', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', shoes: '#fff8ec' });
     makeAgent(res1, W, {
@@ -1524,8 +1579,7 @@ export async function createWorld(opts) {
       ],
     });
 
-    /* --- Astropulse SMM: 9 employees, each with a specific job --- */
-    const H = hqGroup;
+    /* --- shared helpers for the three offices --- */
     const seatedSteps = (pose) => [{ wait: Infinity, pose, face: [-1, 0] }];
     const addHeadset = (p) => {
       const hs = new THREE.Group(); p.head.add(hs);
@@ -1534,57 +1588,53 @@ export async function createWorld(opts) {
       cyl(hs, 0.008, 0.008, 0.18, 4, 0.08, -0.05, 0.1, '#2b2850').rotation.z = 1.3;
       ball(hs, 0.018, 0.14, -0.065, 0.06, '#ff4fa3').castShadow = false;
     };
-    // 1. Developer
-    const dev = makePerson({ shirt: '#4b3fa6', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', shoes: '#2b2850' });
-    makeAgent(dev, H, { x: DESK_X0(0), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps('type') });
-    // 2. Social media manager
-    const smm = makePerson({ shirt: '#ff4fa3', pants: '#2b2850', hair: '#7a4a32', skin: '#f6d2b4', hairStyle: 'pony', shoes: '#fff8ec' });
-    makeAgent(smm, H, { x: DESK_X0(1), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps('type') });
-    // 3. Designer
-    const designer = makePerson({ shirt: '#ffe08a', pants: '#3a3568', hair: '#2b2850', skin: '#c98e68', hairStyle: 'long', shoes: '#ff6b5e' });
-    makeAgent(designer, H, { x: DESK_X0(2), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps('draw') });
-    // 4. Customer support agent (headset, on a call)
-    const support = makePerson({ shirt: '#5ac8c8', pants: '#2b2850', hair: '#8a5a44', skin: '#e0a98a', hairStyle: 'pony', shoes: '#fff8ec' });
-    addHeadset(support);
-    makeAgent(support, H, { x: DESK_X0(3), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps('phone') });
-    // 5. Operations manager: walks the floor with a clipboard and checks every desk
-    const mgr = makePerson({ shirt: '#fff8ec', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' });
-    box(mgr.elbowL, 0.03, 0.22, 0.16, 0.05, -0.17, 0, '#c9966f');
-    const mgrSteps = [];
-    [-2.6, -1.1, 0.4, 1.9].forEach((x) => { const sx = x - 0.75; mgrSteps.push({ go: [sx, 0.05] }, { go: [sx, -0.7] }, { wait: 2.4, pose: 'point', face: [0, -1] }, { go: [sx, 0.05] }); });
-    mgrSteps.push({ go: [-3.2, 0.05] });
-    makeAgent(mgr, H, { x: -3.2, z: 0.05, ground: hqGround, speed: 0.8, steps: mgrSteps });
-    // 6. Team lead: presents the plan at the whiteboard (both hands moving)
-    const lead = makePerson({ shirt: '#8f7fe6', pants: '#2b2850', hair: '#5a3b2a', skin: '#f2c7a5', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' });
-    makeAgent(lead, H, { x: 3.0, z: -2.25, face: [0, 1], ground: hqGround, steps: [{ wait: Infinity, pose: 'talk' }] });
-    // 7. Security guard: watches the gate and waves visitors in while it opens
-    const guard = makePerson({ shirt: '#2b2850', pants: '#2b2850', hair: '#241f4d', skin: '#d9a07a', hat: 'beanie', hatColor: '#1f1a45', shoes: '#241f4d', longSleeve: true, belt: '#e8b23a' });
-    makeAgent(guard, H, {
+    const deskWorker = (grp, i, pose, look) => { const p = makePerson(look); makeAgent(p, grp, { x: DESK_X0(i), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps(pose) }); return p; };
+    const presenter = (grp, look) => makeAgent(makePerson(look), grp, { x: 3.0, z: -2.25, face: [0, 1], ground: hqGround, steps: [{ wait: Infinity, pose: 'talk' }] });
+    const inspector = (grp, look, deskIdx) => {
+      const p = makePerson(look);
+      box(p.elbowL, 0.03, 0.22, 0.16, 0.05, -0.17, 0, '#c9966f');
+      const st = [];
+      deskIdx.forEach((i) => { const sx = DESK_X0(i) - 0.75; st.push({ go: [sx, 0.05] }, { go: [sx, -0.7] }, { wait: 2.4, pose: 'point', face: [0, -1] }, { go: [sx, 0.05] }); });
+      st.push({ go: [-3.2, 0.05] });
+      makeAgent(p, grp, { x: -3.2, z: 0.05, ground: hqGround, speed: 0.8, steps: st });
+    };
+    const gateGuard = (grp, hq, look) => makeAgent(makePerson(look), grp, {
       x: 1.55, z: 2.15, face: [0, 1], ground: hqGround,
       steps: [{ wait: 6, pose: 'idle', face: [0, 1] }, { go: [1.55, 1.5] }, { wait: 4, face: [0, 1] }, { go: [1.55, 2.15] }],
-      tick: (a) => { if (astropulseHQ.gate.target > 0.5 && astropulseHQ.gate.pos < 0.98) { a.pose = 'wave'; a.want = -Math.atan2(1, 0.3); } },
+      tick: (a) => { if (hq.gate.target > 0.5 && hq.gate.pos < 0.98) { a.pose = 'wave'; a.want = -Math.atan2(1, 0.3); } },
     });
-    // 8. Courier: arrives, the gate opens, hands over a parcel at the door, leaves, the gate closes
-    const courier = makePerson({ shirt: '#ff9f43', pants: '#2b2850', hair: '#241f4d', skin: '#e0a98a', hat: 'beanie', hatColor: '#ff9f43', shorts: true, shoes: '#fff8ec' });
-    const parcel = box(courier.upper, 0.2, 0.16, 0.26, 0.3, 0.2, 0, '#c9966f'); parcel.visible = true;
-    const parcelDoor = box(H, 0.3, 0.22, 0.3, 0.9, 0.12, 1.05, '#c9966f'); parcelDoor.visible = false;
-    makeAgent(courier, H, {
-      x: -4.9, z: 3.55, face: [1, 0], ground: hqGround, speed: 1.0,
-      steps: [
-        { do: (a) => { a.hidden = false; a.x = -4.9; a.z = 3.55; a.carry = true; parcel.visible = true; parcelDoor.visible = false; } },
-        { go: [0, 3.55] },
-        { do: () => { astropulseHQ.gate.target = 1; } }, { wait: 1.9, pose: 'idle', face: [0, -1] },
-        { go: [0, 2.3] }, { go: [0, 1.3] },
-        { wait: 2.2, pose: 'give', face: [0, -1] },
-        { do: (a) => { a.carry = false; parcel.visible = false; parcelDoor.visible = true; } },
-        { wait: 0.7 },
-        { go: [0, 2.3] }, { go: [0, 3.55] },
-        { do: () => { astropulseHQ.gate.target = 0; } },
-        { go: [5.2, 3.55] },
-        { do: (a) => { a.hidden = true; } }, { wait: 7 },
-      ],
-    });
-    // 9. Gardener: waters the courtyard plants
+    const courierRun = (grp, hq, look, parcelColor) => {
+      const c = makePerson(look);
+      const parcel = box(c.upper, 0.2, 0.16, 0.26, 0.3, 0.2, 0, parcelColor);
+      const parcelDoor = box(grp, 0.3, 0.22, 0.3, 0.9, 0.12, 1.05, parcelColor); parcelDoor.visible = false;
+      makeAgent(c, grp, {
+        x: -4.9, z: 3.55, face: [1, 0], ground: hqGround, speed: 1.0,
+        steps: [
+          { do: (a) => { a.hidden = false; a.x = -4.9; a.z = 3.55; a.carry = true; parcel.visible = true; parcelDoor.visible = false; } },
+          { go: [0, 3.55] },
+          { do: () => { hq.gate.target = 1; } }, { wait: 1.9, pose: 'idle', face: [0, -1] },
+          { go: [0, 2.3] }, { go: [0, 1.3] },
+          { wait: 2.2, pose: 'give', face: [0, -1] },
+          { do: (a) => { a.carry = false; parcel.visible = false; parcelDoor.visible = true; } },
+          { wait: 0.7 },
+          { go: [0, 2.3] }, { go: [0, 3.55] },
+          { do: () => { hq.gate.target = 0; } },
+          { go: [5.2, 3.55] },
+          { do: (a) => { a.hidden = true; } }, { wait: 7 },
+        ],
+      });
+    };
+
+    /* --- Astropulse SMM: 9 employees --- */
+    const H = hqGroup;
+    deskWorker(H, 0, 'type', { shirt: '#4b3fa6', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', shoes: '#2b2850' });
+    deskWorker(H, 1, 'type', { shirt: '#ff4fa3', pants: '#2b2850', hair: '#7a4a32', skin: '#f6d2b4', hairStyle: 'pony', shoes: '#fff8ec' });
+    deskWorker(H, 2, 'draw', { shirt: '#ffe08a', pants: '#3a3568', hair: '#2b2850', skin: '#c98e68', hairStyle: 'long', shoes: '#ff6b5e' });
+    addHeadset(deskWorker(H, 3, 'phone', { shirt: '#5ac8c8', pants: '#2b2850', hair: '#8a5a44', skin: '#e0a98a', hairStyle: 'pony', shoes: '#fff8ec' }));
+    inspector(H, { shirt: '#fff8ec', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' }, [0, 1, 2, 3]);
+    presenter(H, { shirt: '#8f7fe6', pants: '#2b2850', hair: '#5a3b2a', skin: '#f2c7a5', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' });
+    gateGuard(H, astropulseHQ, { shirt: '#2b2850', pants: '#2b2850', hair: '#241f4d', skin: '#d9a07a', hat: 'beanie', hatColor: '#1f1a45', shoes: '#241f4d', longSleeve: true, belt: '#e8b23a' });
+    courierRun(H, astropulseHQ, { shirt: '#ff9f43', pants: '#2b2850', hair: '#241f4d', skin: '#e0a98a', hat: 'beanie', hatColor: '#ff9f43', shorts: true, shoes: '#fff8ec' }, '#c9966f');
     const gardener = makePerson({ shirt: '#4fae7a', pants: '#6a5a45', hair: '#241f4d', skin: '#d9a07a', hat: 'straw', shoes: '#8a5a44' });
     cyl(gardener.elbowR, 0.07, 0.07, 0.12, 10, 0.06, -0.2, 0, '#5ac8c8'); cyl(gardener.elbowR, 0.012, 0.02, 0.2, 6, 0.17, -0.16, 0, '#5ac8c8').rotation.z = -1.0;
     makeAgent(gardener, H, {
@@ -1597,66 +1647,216 @@ export async function createWorld(opts) {
       ],
     });
 
-    /* --- HealthGIS (.site.je): same desk layout, a smaller team with its own jobs --- */
+    /* --- HealthGIS --- */
     const H2 = hq2Group;
-    // 1. GIS engineer, mapping data at a desk
-    const gisEng = makePerson({ shirt: '#0f6b52', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', shoes: '#2b2850' });
-    makeAgent(gisEng, H2, { x: DESK_X0(0), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps('type') });
-    // 2. Clinical data analyst, charting health records
-    const analyst = makePerson({ shirt: '#2e8bff', pants: '#2b2850', hair: '#7a4a32', skin: '#f6d2b4', hairStyle: 'pony', shoes: '#fff8ec' });
-    makeAgent(analyst, H2, { x: DESK_X0(1), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps('draw') });
-    // 3. Support agent on a call with a clinic (headset)
-    const hSupport = makePerson({ shirt: '#1fbf8f', pants: '#2b2850', hair: '#8a5a44', skin: '#e0a98a', hairStyle: 'pony', shoes: '#fff8ec' });
-    addHeadset(hSupport);
-    makeAgent(hSupport, H2, { x: DESK_X0(2), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps('phone') });
-    // 4. Project lead presenting the rollout map at the whiteboard
-    const hLead = makePerson({ shirt: '#0f6b52', pants: '#2b2850', hair: '#5a3b2a', skin: '#f2c7a5', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' });
-    makeAgent(hLead, H2, { x: 3.0, z: -2.25, face: [0, 1], ground: hqGround, steps: [{ wait: Infinity, pose: 'talk' }] });
-    // 5. Field coordinator: checks every desk, clipboard in hand
-    const hMgr = makePerson({ shirt: '#fff8ec', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' });
-    box(hMgr.elbowL, 0.03, 0.22, 0.16, 0.05, -0.17, 0, '#c9966f');
-    const hMgrSteps = [];
-    [-2.6, -1.1].forEach((x) => { const sx = x - 0.75; hMgrSteps.push({ go: [sx, 0.05] }, { go: [sx, -0.7] }, { wait: 2.4, pose: 'point', face: [0, -1] }, { go: [sx, 0.05] }); });
-    hMgrSteps.push({ go: [-3.2, 0.05] });
-    makeAgent(hMgr, H2, { x: -3.2, z: 0.05, ground: hqGround, speed: 0.8, steps: hMgrSteps });
-    // 6. Gate guard, waves people through while the gate opens
-    const hGuard = makePerson({ shirt: '#0f3f30', pants: '#2b2850', hair: '#241f4d', skin: '#d9a07a', hat: 'beanie', hatColor: '#0f3f30', shoes: '#241f4d', longSleeve: true, belt: '#1fbf8f' });
-    makeAgent(hGuard, H2, {
-      x: 1.55, z: 2.15, face: [0, 1], ground: hqGround,
-      steps: [{ wait: 6, pose: 'idle', face: [0, 1] }, { go: [1.55, 1.5] }, { wait: 4, face: [0, 1] }, { go: [1.55, 2.15] }],
-      tick: (a) => { if (healthgisHQ.gate.target > 0.5 && healthgisHQ.gate.pos < 0.98) { a.pose = 'wave'; a.want = -Math.atan2(1, 0.3); } },
+    deskWorker(H2, 0, 'type', { shirt: '#0f6b52', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', shoes: '#2b2850' });
+    deskWorker(H2, 1, 'draw', { shirt: '#2e8bff', pants: '#2b2850', hair: '#7a4a32', skin: '#f6d2b4', hairStyle: 'pony', shoes: '#fff8ec' });
+    addHeadset(deskWorker(H2, 2, 'phone', { shirt: '#1fbf8f', pants: '#2b2850', hair: '#8a5a44', skin: '#e0a98a', hairStyle: 'pony', shoes: '#fff8ec' }));
+    presenter(H2, { shirt: '#0f6b52', pants: '#2b2850', hair: '#5a3b2a', skin: '#f2c7a5', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' });
+    inspector(H2, { shirt: '#fff8ec', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' }, [0, 1]);
+    gateGuard(H2, healthgisHQ, { shirt: '#0f3f30', pants: '#2b2850', hair: '#241f4d', skin: '#d9a07a', hat: 'beanie', hatColor: '#0f3f30', shoes: '#241f4d', longSleeve: true, belt: '#1fbf8f' });
+    courierRun(H2, healthgisHQ, { shirt: '#2e8bff', pants: '#2b2850', hair: '#241f4d', skin: '#e0a98a', hat: 'beanie', hatColor: '#2e8bff', shorts: true, shoes: '#fff8ec' }, '#e6f7f1');
+
+    /* --- Nexora AI --- */
+    const H3 = hq3Group;
+    deskWorker(H3, 0, 'type', { shirt: '#4b3fa6', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', shoes: '#2b2850' });
+    deskWorker(H3, 1, 'draw', { shirt: '#ff9fb8', pants: '#3a3568', hair: '#2b2850', skin: '#c98e68', hairStyle: 'long', shoes: '#ff6b5e' });
+    addHeadset(deskWorker(H3, 2, 'phone', { shirt: '#5ac8c8', pants: '#2b2850', hair: '#8a5a44', skin: '#e0a98a', hairStyle: 'pony', shoes: '#fff8ec' }));
+    presenter(H3, { shirt: '#8f7fe6', pants: '#2b2850', hair: '#5a3b2a', skin: '#f2c7a5', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' });
+    inspector(H3, { shirt: '#fff8ec', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' }, [0, 1]);
+    gateGuard(H3, nexoraHQ, { shirt: '#2b2850', pants: '#2b2850', hair: '#241f4d', skin: '#d9a07a', hat: 'beanie', hatColor: '#4b3fa6', shoes: '#241f4d', longSleeve: true, belt: '#8f7fe6' });
+    courierRun(H3, nexoraHQ, { shirt: '#ff9f43', pants: '#2b2850', hair: '#241f4d', skin: '#e0a98a', hat: 'beanie', hatColor: '#ff9f43', shorts: true, shoes: '#fff8ec' }, '#c9bfff');
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* 8.5 the west district, the lake and the lighthouse                */
+  /* ---------------------------------------------------------------- */
+  await stage(0.84, 'Growing the west district', () => {
+    const cx = (CITY2.x0 + CITY2.x1) / 2, cz = (CITY2.z0 + CITY2.z1) / 2, STREET_Z = 21.5;
+    slab(W, cx, cz, CITY2.x1 - CITY2.x0, CITY2.z1 - CITY2.z0, '#e4def7', 0.02, 0.04);
+    slab(W, cx, STREET_Z, CITY2.x1 - CITY2.x0, 1.8, '#3f3d66', 0.04, 0.06);
+    slab(W, cx, STREET_Z - 1.15, CITY2.x1 - CITY2.x0, 0.6, '#f4f0ff', 0.05, 0.06);
+    slab(W, cx, STREET_Z + 1.15, CITY2.x1 - CITY2.x0, 0.6, '#f4f0ff', 0.05, 0.06);
+    for (let i = 0; i < 17; i++) box(W, 0.45, 0.012, 0.07, CITY2.x0 + 0.8 + i * 1.0, 0.08, STREET_Z, '#fff1dc').castShadow = false;
+
+    const winTex2 = canvasTexture((g, s) => {
+      g.fillStyle = '#e6e0fa'; g.fillRect(0, 0, s, s);
+      g.fillStyle = '#6ad0ff'; g.fillRect(34, 30, 60, 68);
+      g.fillStyle = 'rgba(255,255,255,0.55)'; g.fillRect(34, 30, 60, 14);
+    }, 128);
+    winTex2.wrapS = winTex2.wrapT = THREE.RepeatWrapping;
+    const tower = (x, z, w, d, h, tint, roofC) => {
+      const side = (len) => {
+        const t = winTex2.clone(); t.needsUpdate = true; t.repeat.set(Math.max(1, Math.round(len * 1.1)), Math.max(1, Math.round(h * 1.1)));
+        return new THREE.MeshLambertMaterial({ color: tint, map: t });
+      };
+      const roof = new THREE.MeshLambertMaterial({ color: roofC });
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [side(d), side(d), roof, roof, side(w), side(w)]);
+      m.position.set(x, h / 2 + 0.05, z); m.castShadow = true; m.receiveShadow = true; W.add(m);
+      box(W, w * 0.55, 0.3, d * 0.55, x, h + 0.2, z, '#8a84b8');
+      if (h > 6) {
+        cyl(W, 0.03, 0.04, 1.0, 5, x, h + 0.85, z, '#d8d2ff');
+        ball(W, 0.08, x, h + 1.4, z, '#ff6b5e', { emissive: '#ff6b5e', emissiveIntensity: 1 }).castShadow = false;
+      }
+    };
+    const NORTH = [[-28.2, 7.5, '#cdbff5', '#4b3fa6'], [-24.6, 5.2, '#bff0ee', '#2b2850'], [-21.0, 9.0, '#ffd0de', '#6c58cf'], [-17.4, 4.4, '#d8f5c8', '#3a2f5b']];
+    const SOUTH = [[-28.2, 4.2, '#ffe6b8', '#8a5a44'], [-24.4, 6.6, '#cfe0ff', '#4b3fa6'], [-20.6, 5.0, '#f5ccff', '#6c58cf'], [-16.8, 8.2, '#bff0ee', '#2b2850']];
+    NORTH.forEach(([x, h, tint, rf]) => tower(x, 17.6, 2.4, 2.4, h, tint, rf));
+    SOUTH.forEach(([x, h, tint, rf]) => tower(x, 25.4, 2.4, 2.4, h, tint, rf));
+
+    // fountain plaza
+    const fo = new THREE.Group(); fo.position.set(-14.4, 0, 26.2); W.add(fo);
+    cyl(fo, 0.9, 1.0, 0.18, 14, 0, 0.1, 0, '#d8d2ff');
+    cyl(fo, 0.75, 0.75, 0.06, 14, 0, 0.2, 0, '#5fd0e8', { emissive: '#1f7f9a', emissiveIntensity: 0.4 }).castShadow = false;
+    cyl(fo, 0.1, 0.14, 0.7, 8, 0, 0.5, 0, '#d8d2ff');
+    const jet = ball(fo, 0.16, 0, 0.9, 0, '#bff3ff', { emissive: '#7ee8ff', emissiveIntensity: 0.8 }); jet.castShadow = false;
+    const drops = [0, 1, 2, 3, 4, 5].map((i) => { const m = ball(fo, 0.05, 0, 0.9, 0, '#e8fbff', { emissive: '#9ff3ff', emissiveIntensity: 0.6 }); m.castShadow = false; return { m, a: (i / 6) * TAU }; });
+    animators.push((dt, t) => {
+      jet.scale.y = 1 + Math.sin(t * 5) * 0.2;
+      drops.forEach((d, i) => { const k = (t * 0.9 + i / 6) % 1; d.m.position.set(Math.cos(d.a) * k * 0.7, 0.9 + Math.sin(k * Math.PI) * 0.55, Math.sin(d.a) * k * 0.7); d.m.scale.setScalar(1 - k * 0.5); });
     });
-    // 7. Courier: delivers a sample kit, gate opens and closes around the visit
-    const hCourier = makePerson({ shirt: '#2e8bff', pants: '#2b2850', hair: '#241f4d', skin: '#e0a98a', hat: 'beanie', hatColor: '#2e8bff', shorts: true, shoes: '#fff8ec' });
-    const hParcel = box(hCourier.upper, 0.2, 0.16, 0.26, 0.3, 0.2, 0, '#e6f7f1'); hParcel.visible = true;
-    const hParcelDoor = box(H2, 0.3, 0.22, 0.3, 0.9, 0.12, 1.05, '#e6f7f1'); hParcelDoor.visible = false;
-    makeAgent(hCourier, H2, {
-      x: -4.9, z: 3.55, face: [1, 0], ground: hqGround, speed: 1.0,
-      steps: [
-        { do: (a) => { a.hidden = false; a.x = -4.9; a.z = 3.55; a.carry = true; hParcel.visible = true; hParcelDoor.visible = false; } },
-        { go: [0, 3.55] },
-        { do: () => { healthgisHQ.gate.target = 1; } }, { wait: 1.9, pose: 'idle', face: [0, -1] },
-        { go: [0, 2.3] }, { go: [0, 1.3] },
-        { wait: 2.2, pose: 'give', face: [0, -1] },
-        { do: (a) => { a.carry = false; hParcel.visible = false; hParcelDoor.visible = true; } },
-        { wait: 0.7 },
-        { go: [0, 2.3] }, { go: [0, 3.55] },
-        { do: () => { healthgisHQ.gate.target = 0; } },
-        { go: [5.2, 3.55] },
-        { do: (a) => { a.hidden = true; } }, { wait: 7 },
-      ],
+
+    // street lamps, round trees, benches
+    [-27, -22.5, -18, -14.5].forEach((x) => addLamp(x, STREET_Z + 1.5));
+    [-29.6, -26.6, -23.4, -20.2, -17.0].forEach((x, i) => {
+      const t = new THREE.Group(); t.position.set(x, 0, 27.4); W.add(t);
+      cyl(t, 0.07, 0.1, 0.7, 6, 0, 0.35, 0, '#8a5a44');
+      ball(t, 0.5, 0, 1.0, 0, ['#55c28a', '#ffb3c7', '#6fd08a', '#ffc9a8', '#55c28a'][i]);
+      ball(t, 0.32, 0.25, 0.85, 0.1, ['#3fae7a', '#ffa0bd', '#4fae7a', '#ffb07a', '#3fae7a'][i]);
+    });
+    [-26.2, -19.2].forEach((x) => {
+      box(W, 0.95, 0.06, 0.34, x, 0.36, 19.9, '#c9966f'); box(W, 0.95, 0.3, 0.05, x, 0.55, 19.72, '#c9966f');
+      box(W, 0.06, 0.34, 0.3, x - 0.4, 0.17, 19.9, '#2b2850'); box(W, 0.06, 0.34, 0.3, x + 0.4, 0.17, 19.9, '#2b2850');
+    });
+
+    // cars along the west street
+    const car2 = (color) => {
+      const c = new THREE.Group();
+      box(c, 0.95, 0.24, 0.46, 0, 0.24, 0, color);
+      box(c, 0.5, 0.22, 0.42, -0.05, 0.46, 0, '#fff1dc');
+      box(c, 0.44, 0.14, 0.44, -0.05, 0.47, 0, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.2 });
+      [[-0.3, 0.24], [-0.3, -0.24], [0.3, 0.24], [0.3, -0.24]].forEach(([x, z]) => { cyl(c, 0.1, 0.1, 0.08, 10, x, 0.1, z, '#2b2850').rotation.x = Math.PI / 2; });
+      box(c, 0.04, 0.07, 0.1, 0.48, 0.26, 0.14, '#fff3b0', { emissive: '#ffd36e', emissiveIntensity: 1 });
+      box(c, 0.04, 0.07, 0.1, 0.48, 0.26, -0.14, '#fff3b0', { emissive: '#ffd36e', emissiveIntensity: 1 });
+      W.add(c); return c;
+    };
+    const wc = [
+      { g: car2('#ff9f43'), x: -27, dir: 1, z: STREET_Z + 0.42, sp: 1.5 },
+      { g: car2('#5ac8c8'), x: -20, dir: -1, z: STREET_Z - 0.42, sp: 1.3 },
+      { g: car2('#ff4fa3'), x: -16, dir: 1, z: STREET_Z + 0.42, sp: 1.1 },
+    ];
+    wc.forEach((c) => { c.g.rotation.y = c.dir > 0 ? 0 : Math.PI; c.g.position.set(c.x, 0.05, c.z); });
+    animators.push((dt) => wc.forEach((c) => {
+      c.x += c.dir * c.sp * dt;
+      if (c.x > CITY2.x1 - 0.5) c.x = CITY2.x0 + 0.5; else if (c.x < CITY2.x0 + 0.5) c.x = CITY2.x1 - 0.5;
+      c.g.position.x = c.x;
+      c.g.scale.setScalar(Math.max(0.001, Math.min(1, Math.min(c.x - CITY2.x0, CITY2.x1 - c.x) / 1.5)));
+    }));
+
+    // a pedestrian walking the west pavement
+    const walker = makePerson({ shirt: '#5ac8c8', pants: '#3a3568', hair: '#8a5a44', skin: '#e0a98a', hairStyle: 'long', shoes: '#fff8ec' });
+    makeAgent(walker, W, {
+      x: -28, z: STREET_Z - 1.15, ground: cityGround, speed: 0.9,
+      steps: [{ go: [-16, STREET_Z - 1.15] }, { wait: 2, pose: 'wave', face: [0, 1] }, { go: [-28, STREET_Z - 1.15] }, { wait: 2 }],
     });
   });
-  function DESK_X0(i) { return [-2.6, -1.1, 0.4, 1.9][i]; }
+
+  await stage(0.87, 'Filling the lake and lighting the lighthouse', () => {
+    // lake with a pier and a rowing boat
+    const lake = new THREE.Group(); lake.position.set(31, 0, 8); W.add(lake);
+    cyl(lake, 4.7, 4.9, 0.06, 28, 0, -0.11, 0, '#c9b28a').castShadow = false;
+    const lw = cyl(lake, 4.3, 4.3, 0.04, 28, 0, -0.07, 0, '#5fd0e8', { emissive: '#1f7f9a', emissiveIntensity: 0.35 }); lw.castShadow = false;
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * TAU + rng() * 0.3, r = 4.4 + rng() * 0.35;
+      cone(lake, 0.05, 0.6 + rng() * 0.4, 4, Math.cos(a) * r, 0.2, Math.sin(a) * r, '#3f9e6a');
+    }
+    for (let i = 0; i < 6; i++) {
+      const a = rng() * TAU, r = 1.2 + rng() * 2.4;
+      cyl(lake, 0.25, 0.25, 0.02, 8, Math.cos(a) * r, -0.04, Math.sin(a) * r, '#4fae7a').castShadow = false;
+      ball(lake, 0.05, Math.cos(a) * r, -0.01, Math.sin(a) * r, '#ffb3c7').castShadow = false;
+    }
+    for (let i = 0; i < 9; i++) box(lake, 0.34, 0.06, 1.0, -4.3 + i * 0.42, 0.12, -0.0, '#c9966f');   // pier planks
+    [-4.3, -2.6, -0.9].forEach((x) => { box(lake, 0.08, 0.5, 0.08, x, 0.0, 0.55, '#8a5a44'); box(lake, 0.08, 0.5, 0.08, x, 0.0, -0.55, '#8a5a44'); });
+    const boat = new THREE.Group(); boat.position.set(1.0, 0, 1.6); lake.add(boat);
+    box(boat, 1.1, 0.14, 0.45, 0, 0.0, 0, '#e8564a'); box(boat, 0.9, 0.05, 0.3, 0, 0.09, 0, '#fff1dc');
+    box(boat, 0.05, 0.05, 1.0, 0.1, 0.2, 0, '#8a5a44');
+    const ripL = [0, 1, 2].map((i) => {
+      const m = new THREE.Mesh(new THREE.RingGeometry(0.9, 0.96, 28), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
+      m.rotation.x = -Math.PI / 2; m.position.set(-1.0, -0.04, -1.4); lake.add(m); return { m, off: i / 3 };
+    });
+    animators.push((dt, t) => {
+      lw.material.emissiveIntensity = 0.3 + Math.sin(t * 1.2) * 0.08;
+      boat.position.y = Math.sin(t * 1.6) * 0.03; boat.rotation.z = Math.sin(t * 1.3) * 0.05; boat.rotation.y = 0.3 + Math.sin(t * 0.4) * 0.1;
+      ripL.forEach((r) => { const k = (t * 0.25 + r.off) % 1; r.m.scale.setScalar(0.3 + k * 2.2); r.m.material.opacity = (1 - k) * 0.45; });
+    });
+    const angler = makePerson({ shirt: '#ff9f43', pants: '#6a5a45', hair: '#241f4d', hat: 'straw', skin: '#e0a98a', shoes: '#8a5a44' });
+    makeAgent(angler, lake, { x: -4.0, z: 0.0, face: [1, 0], ground: () => 0.2, steps: [{ wait: Infinity, pose: 'sit' }] });
+
+    // lighthouse
+    const lh = new THREE.Group(); lh.position.set(33, 0, 27); W.add(lh);
+    cyl(lh, 2.3, 2.5, 0.25, 12, 0, 0.12, 0, '#8a84b8');
+    for (let i = 0; i < 5; i++) cyl(lh, 0.8 - i * 0.08, 0.9 - i * 0.08, 0.9, 12, 0, 0.7 + i * 0.9, 0, i % 2 ? '#e8564a' : '#fff8ec');
+    cyl(lh, 0.78, 0.7, 0.14, 12, 0, 5.3, 0, '#2b2850');
+    cyl(lh, 0.46, 0.46, 0.6, 10, 0, 5.7, 0, '#fff3b0', { emissive: '#ffd36e', emissiveIntensity: 1 }).castShadow = false;
+    cone(lh, 0.62, 0.55, 10, 0, 6.28, 0, '#e8564a');
+    ball(lh, 0.08, 0, 6.65, 0, '#ffd36e', { emissive: '#ffd36e', emissiveIntensity: 1 }).castShadow = false;
+    box(lh, 0.3, 0.55, 0.04, 0, 0.45, 0.8, '#6c58cf');
+    const lhGlow = glow(lh, 0xffe08a, 4.2, 0.6, 0, 5.7, 0);
+    const beam = new THREE.Group(); beam.position.set(0, 5.7, 0); lh.add(beam);
+    const bm = new THREE.Mesh(new THREE.ConeGeometry(1.1, 9, 16, 1, true), new THREE.MeshBasicMaterial({ color: '#fff3b0', transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
+    bm.rotation.z = Math.PI / 2; bm.position.x = 4.5; beam.add(bm);
+    const bm2 = bm.clone(); bm2.rotation.z = -Math.PI / 2; bm2.position.x = -4.5; beam.add(bm2);
+    animators.push((dt, t) => { beam.rotation.y += dt * 0.9; lhGlow.material.opacity = 0.5 + Math.sin(t * 3) * 0.12; });
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* 8.6 sky life: rainbow, hot-air balloon, floating islets           */
+  /* ---------------------------------------------------------------- */
+  await stage(0.9, 'Painting a rainbow and floating islets', () => {
+    // rainbow behind the northern mountains
+    const rb = new THREE.Group(); rb.position.set(6, -6, -(R + 46)); W.add(rb);
+    ['#ff5e5e', '#ff9f43', '#ffe08a', '#7ed957', '#4fd1e0', '#5a7bff', '#b36bff'].forEach((c, i) => {
+      const arc = new THREE.Mesh(new THREE.TorusGeometry(50 - i * 1.5, 0.8, 6, 64, Math.PI), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.38, depthWrite: false, fog: false }));
+      rb.add(arc);
+    });
+
+    // hot-air balloon circling the island
+    const bal = new THREE.Group(); W.add(bal);
+    const envGeo = new THREE.SphereGeometry(1.5, 18, 14), ep = envGeo.attributes.position, ec = new Float32Array(ep.count * 3), pal = ['#ff6b5e', '#ffe08a', '#5ac8c8', '#8f7fe6'].map((c) => new THREE.Color(c));
+    for (let i = 0; i < ep.count; i++) pal[Math.floor(((Math.atan2(ep.getX(i), ep.getZ(i)) + Math.PI) / TAU) * 8) % 4].toArray(ec, i * 3);
+    envGeo.setAttribute('color', new THREE.BufferAttribute(ec, 3));
+    const env = new THREE.Mesh(envGeo, new THREE.MeshLambertMaterial({ vertexColors: true })); env.scale.set(1, 1.2, 1); env.position.y = 3.2; env.castShadow = true; bal.add(env);
+    box(bal, 0.7, 0.45, 0.7, 0, 0.9, 0, '#a9714f');
+    [[0.3, 0.3], [-0.3, 0.3], [0.3, -0.3], [-0.3, -0.3]].forEach(([x, z]) => { const r = cyl(bal, 0.012, 0.012, 1.7, 4, x * 1.2, 1.9, z * 1.2, '#2b2850'); r.castShadow = false; });
+    glow(bal, 0xffa040, 1.2, 0.8, 0, 1.4, 0);
+    animators.push((dt, t) => {
+      const a = t * 0.05 + 1.0, rad = R * 0.55;
+      bal.position.set(Math.cos(a) * rad, 16 + Math.sin(t * 0.5) * 0.8, Math.sin(a) * rad);
+      bal.rotation.y = t * 0.1; bal.rotation.z = Math.sin(t * 0.6) * 0.03;
+    });
+
+    // floating islets around the main island
+    const islets = [];
+    for (let i = 0; i < (simple ? 3 : 7); i++) {
+      const a = (i / 7) * TAU + 0.4, r = R + 9 + (i % 3) * 5, g = new THREE.Group();
+      const rk = cone(g, 1.8, 2.6, 8, 0, -1.3, 0, '#5a4aa8'); rk.rotation.x = Math.PI;
+      cyl(g, 1.8, 1.8, 0.3, 10, 0, 0.1, 0, '#7bd88f');
+      cone(g, 0.45, 1.0, 6, -0.3, 0.8, 0.1, '#2f9e78'); cone(g, 0.32, 0.8, 6, 0.5, 0.7, -0.3, '#38ae84');
+      if (i % 2) ball(g, 0.45, 0.4, 0.55, 0.5, '#ffb3c7');
+      g.position.set(Math.cos(a) * r, 3 + (i % 4) * 2.5, Math.sin(a) * r); g.rotation.y = i;
+      W.add(g); islets.push({ g, base: g.position.y, ph: i * 1.7 });
+    }
+    animators.push((dt, t) => islets.forEach((o) => { o.g.position.y = o.base + Math.sin(t * 0.6 + o.ph) * 0.5; o.g.rotation.y += dt * 0.05; }));
+  });
 
   /* ---------------------------------------------------------------- */
   /* 9. atmosphere: clouds, floating rocks, sparkles, birds, butterflies */
   /* ---------------------------------------------------------------- */
   let cloudsFar;
-  await stage(0.92, 'Drifting clouds in', () => {
+  await stage(0.93, 'Drifting clouds in', () => {
     cloudsFar = new THREE.Group(); W.add(cloudsFar);
     const cloudMat = new THREE.MeshLambertMaterial({ color: '#ffffff', emissive: '#a9bce8', emissiveIntensity: 0.35, flatShading: true });
-    const count = simple ? 8 : 18;
+    const count = simple ? 10 : 26;
     for (let i = 0; i < count; i++) {
       const parts = [], blobs = 4 + Math.floor(rng() * 3);
       for (let b = 0; b < blobs; b++) {
@@ -1666,21 +1866,21 @@ export async function createWorld(opts) {
         parts.push(g);
       }
       const cloud = new THREE.Mesh(mergeGeometries(parts), cloudMat);
-      const low = i % 2 === 0, ang = rng() * TAU, rad = 42 + rng() * 45;
-      cloud.position.set(Math.cos(ang) * rad, low ? -16 - rng() * 10 : 9 + rng() * 16, Math.sin(ang) * rad);
-      cloud.scale.setScalar(low ? 1.9 + rng() : 1.1 + rng() * 0.9);
+      const low = i % 2 === 0, ang = rng() * TAU, rad = R + 22 + rng() * 60;
+      cloud.position.set(Math.cos(ang) * rad, low ? -18 - rng() * 12 : 12 + rng() * 22, Math.sin(ang) * rad);
+      cloud.scale.setScalar(low ? 2.2 + rng() : 1.3 + rng() * 1.0);
       cloud.rotation.y = rng() * TAU; cloud.userData.bob = rng() * TAU;
       cloudsFar.add(cloud);
     }
     const floaters = [];
-    for (let i = 0; i < (simple ? 5 : 11); i++) {
-      const a = rng() * TAU, r = R + 2 + rng() * 6;
+    for (let i = 0; i < (simple ? 5 : 14); i++) {
+      const a = rng() * TAU, r = R + 2 + rng() * 7;
       const m = new THREE.Mesh(geo('floatrock', () => new THREE.IcosahedronGeometry(1, 0)), mat(i % 2 ? '#5a4aa8' : '#8a84b8'));
-      m.position.set(Math.cos(a) * r, -1.5 - rng() * 8, Math.sin(a) * r); m.scale.setScalar(0.35 + rng() * 0.8); m.castShadow = true;
+      m.position.set(Math.cos(a) * r, -1.5 - rng() * 9, Math.sin(a) * r); m.scale.setScalar(0.35 + rng() * 0.9); m.castShadow = true;
       m.userData = { base: m.position.y, ph: rng() * TAU, sp: 0.4 + rng() * 0.5 };
       W.add(m); floaters.push(m);
     }
-    const N = simple ? 70 : small ? 120 : 230, pp = new Float32Array(N * 3), seeds = [];
+    const N = simple ? 80 : small ? 140 : 340, pp = new Float32Array(N * 3), seeds = [];
     for (let i = 0; i < N; i++) {
       const a = rng() * TAU, r = Math.sqrt(rng()) * (R - 1);
       seeds.push({ x: Math.cos(a) * r, z: Math.sin(a) * r, y: rng() * 9, ph: rng() * TAU, sp: 0.4 + rng() * 0.8 });
@@ -1699,16 +1899,16 @@ export async function createWorld(opts) {
     writeSparkles(0);
 
     const birds = [];
-    for (let i = 0; i < (simple ? 2 : 6); i++) {
+    for (let i = 0; i < (simple ? 3 : 9); i++) {
       const b = new THREE.Group();
       const body = put(b, geo('birdbody', () => new THREE.ConeGeometry(0.08, 0.42, 5)), mat(i % 2 ? '#ffffff' : '#fff1dc'), 0, 0, 0, false); body.rotation.z = -Math.PI / 2;
       const wl = new THREE.Group(), wr = new THREE.Group(); b.add(wl, wr);
       put(wl, geo('wing', () => new THREE.BoxGeometry(0.2, 0.015, 0.4)), mat('#ffffff'), 0, 0, 0.2, false);
       put(wr, geo('wing', () => new THREE.BoxGeometry(0.2, 0.015, 0.4)), mat('#ffffff'), 0, 0, -0.2, false);
-      W.add(b); birds.push({ b, wl, wr, rad: 12 + i * 3.6, h: 11 + (i % 3) * 1.6, sp: 0.15 + i * 0.01, off: i * 1.3 });
+      W.add(b); birds.push({ b, wl, wr, rad: 16 + i * 4.4, h: 12 + (i % 3) * 1.8, sp: 0.15 + i * 0.01, off: i * 1.3 });
     }
     const flies = [];
-    for (let i = 0; i < (simple ? 3 : 10); i++) {
+    for (let i = 0; i < (simple ? 3 : 14); i++) {
       let cx = 0, cz = 0;
       for (let k = 0; k < 60; k++) {
         const rr = Math.sqrt(rng()) * (R - 4), a = rng() * TAU; cx = rr * Math.cos(a); cz = rr * Math.sin(a);
@@ -1719,7 +1919,7 @@ export async function createWorld(opts) {
       put(wl, geo('bwing', () => new THREE.BoxGeometry(0.1, 0.008, 0.11)), mat(col), 0, 0, 0.055, false);
       put(wr, geo('bwing', () => new THREE.BoxGeometry(0.1, 0.008, 0.11)), mat(col), 0, 0, -0.055, false);
       put(f, geo('bbody', () => new THREE.BoxGeometry(0.1, 0.02, 0.02)), mat('#2b2850'), 0, 0, 0, false);
-      W.add(f); flies.push({ f, wl, wr, cx, cz, ph: rng() * TAU, r: 0.8 + rng() * 1.1, sp: 0.4 + rng() * 0.4 });
+      W.add(f); flies.push({ f, wl, wr, cx, cz, base: terrainH(cx, cz), ph: rng() * TAU, r: 0.8 + rng() * 1.1, sp: 0.4 + rng() * 0.4 });
     }
 
     animators.push((dt, t) => {
@@ -1735,7 +1935,7 @@ export async function createWorld(opts) {
       });
       flies.forEach((o) => {
         const a = t * o.sp + o.ph, flap = 0.2 + Math.abs(Math.sin(t * 14 + o.ph)) * 1.1;
-        o.f.position.set(o.cx + Math.cos(a) * o.r, terrainH(o.cx, o.cz) + 0.7 + Math.sin(a * 2.1) * 0.35, o.cz + Math.sin(a * 1.3) * o.r);
+        o.f.position.set(o.cx + Math.cos(a) * o.r, o.base + 0.7 + Math.sin(a * 2.1) * 0.35, o.cz + Math.sin(a * 1.3) * o.r);
         o.f.rotation.y = -Math.atan2(Math.cos(a * 1.3) * 1.3, -Math.sin(a));
         o.wl.rotation.x = flap; o.wr.rotation.x = -flap;
       });
@@ -1745,10 +1945,10 @@ export async function createWorld(opts) {
   /* ---------------------------------------------------------------- */
   /* 10. hotspots: glowing markers + click / hover detection           */
   /* ---------------------------------------------------------------- */
-  const markers = new THREE.Group(); scene.add(markers);   // markers live outside W so their size stays constant
+  const markers = new THREE.Group(); scene.add(markers);
   const markerList = [], hitProxies = [];
   let pickId = null, domHoverId = null;
-  const MARK = 1.15;
+  const MARK = 1.3;
 
   (config.hotspots || []).forEach((h, idx) => {
     const color = new THREE.Color(h.color || '#ffffff');
@@ -1766,7 +1966,7 @@ export async function createWorld(opts) {
 
   const tmpV = new THREE.Vector3();
   const rayPick = new THREE.Raycaster(), rayOcc = new THREE.Raycaster(), ndc = new THREE.Vector2();
-  function markerHidden(m) {                           // is the marker behind a hill?
+  function markerHidden(m) {
     if (!m || !m.g || !terrain) return false;
     tmpV.copy(m.g.position).sub(camera.position);
     const dist = tmpV.length();
@@ -1782,10 +1982,10 @@ export async function createWorld(opts) {
     const hit = rayPick.intersectObjects(hitProxies, false)[0];
     if (!hit || !hit.object || !hit.object.userData) return null;
     const ground = terrain ? rayPick.intersectObject(terrain, false)[0] : null;
-    if (ground && ground.distance < hit.distance - 0.4) return null;   // a hill is in the way
+    if (ground && ground.distance < hit.distance - 0.4) return null;
     return hit.object.userData.id || null;
   }
-  always.push((dt, t) => {                             // markers float, pulse and swell when hovered
+  always.push((dt, t) => {
     const hot = pickId || domHoverId;
     markerList.forEach((m) => {
       if (animate) {
@@ -1823,14 +2023,14 @@ export async function createWorld(opts) {
     mode = id === 'home' || id === 'explore' ? id : 'section';
     markers.visible = mode !== 'section';
     setPick(null);
-    if (flight) { flight.kill(); flight = null; }      // never let two flights fight over the camera
+    if (flight) { flight.kill(); flight = null; }
     controls.enabled = false;
 
     const p0 = camera.position.clone(), t0 = controls.target.clone();
     const p1 = new THREE.Vector3().fromArray(v.position), t1 = new THREE.Vector3().fromArray(v.target);
     const dist = p0.distanceTo(p1);
-    const dur = animate ? (o.duration || clamp(1.25 + dist * 0.04, 1.6, 2.9)) : 0.01;
-    const lift = animate ? clamp(dist * 0.12, 0.4, 3.5) : 0;      // the camera arcs up a little mid-flight
+    const dur = animate ? (o.duration || clamp(1.25 + dist * 0.03, 1.6, 3.2)) : 0.01;
+    const lift = animate ? clamp(dist * 0.12, 0.4, 5) : 0;
     const k = { p: 0, t: 0 }, boost = { v: fovBoost }, pos = new THREE.Vector3(), tgt = new THREE.Vector3();
 
     const apply = () => {
@@ -1861,7 +2061,6 @@ export async function createWorld(opts) {
     shiftTl.to(shift, { x, y }, { duration, ease: 'power3.inOut', onUpdate: () => applyView(true) });
   }
 
-  // Keyboard helper (arrow keys / + / -) called from main.js.
   function nudge(dx, dy, zoom) {
     if (flight || mode === 'section') return;
     onUserInteract();
@@ -1929,19 +2128,18 @@ export async function createWorld(opts) {
   /* ---------------------------------------------------------------- */
   onProgress(0.97, 'Warming up the graphics');
   await pause();
-  scene.updateMatrixWorld(true);                       // so raycasts against the scaled world are correct from frame one
+  scene.updateMatrixWorld(true);
   try {
     if (renderer.compileAsync) await Promise.race([renderer.compileAsync(scene, camera), new Promise((r) => setTimeout(r, 4000))]);
     else renderer.compile(scene, camera);
-  } catch (e) { /* not critical: the first frame compiles whatever is missing */ }
+  } catch (e) { /* not critical */ }
 
-  // Start far away so playIntro() can swoop in.
   const homeV = views.home;
   camera.position.set(homeV.position[0] + 22 * CAMERA_SCALE, homeV.position[1] + 24 * CAMERA_SCALE, homeV.position[2] + 34 * CAMERA_SCALE);
   controls.target.fromArray(homeV.target);
   camera.lookAt(controls.target);
   if (!animate) { camera.position.fromArray(homeV.position); camera.lookAt(controls.target); }
-  setLimits('section');                                // wide limits until the intro flight finishes
+  setLimits('section');
   controls.enabled = false;
   controls.update();
 
@@ -1953,7 +2151,7 @@ export async function createWorld(opts) {
   const screens = (config.hotspots || []).map((h) => ({ id: h.id, x: 0, y: 0, visible: false }));
   const hiddenBy = {};
 
-  function downgrade() {                               // if the device is struggling, trade looks for smoothness
+  function downgrade() {
     renderer.setPixelRatio(1); resize();
     if (sunLight && sunLight.castShadow) sunLight.castShadow = false;
     onWarning('Switched to lighter graphics so the scene stays smooth.');
@@ -1976,11 +2174,11 @@ export async function createWorld(opts) {
 
     if (!flight && (controls.enabled || controls.autoRotate) && controls.update()) dirty = true;
 
-    if (mode === 'explore') {                          // keep the HTML labels glued to the 3D markers
+    if (mode === 'explore') {
       try {
         if (markerList.length) {
           const m = markerList[occIndex++ % markerList.length];
-          if (m) hiddenBy[m.id] = markerHidden(m);      // check one marker per frame to keep it cheap
+          if (m) hiddenBy[m.id] = markerHidden(m);
         }
         markerList.forEach((m, i) => {
           if (!m || !m.g) return;
@@ -1992,14 +2190,13 @@ export async function createWorld(opts) {
         });
         onFrame(screens);
       } catch (err) {
-        // A glitch in the floating-label overlay should never take down the whole 3D view.
         console.warn('Hotspot label update skipped a frame:', err);
       }
     }
 
     if (animate || dirty) { renderer.render(scene, camera); dirty = false; }
 
-    if (animate && !perf.done && ++perf.warm > 90) {   // measure the frame rate once, after warm-up
+    if (animate && !perf.done && ++perf.warm > 90) {
       perf.sum += dt;
       if (++perf.n >= 120) { perf.done = true; if (perf.sum / perf.n > 0.034) downgrade(); }
     }
@@ -2020,7 +2217,8 @@ export async function createWorld(opts) {
   function dispose() {
     if (disposed) return;
     disposed = true; stop();
-    if (flight) flight.kill(); if (shiftTl) shiftTl.kill();
+    if (flight) flight.kill();
+    if (shiftTl) shiftTl.kill();
     clearTimeout(holdTimer); cancelAnimationFrame(hoverRaf);
     cleanups.forEach((fn) => fn());
     controls.dispose();
@@ -2045,7 +2243,7 @@ export async function createWorld(opts) {
     playIntro() {
       if (!animate) { flyTo('home'); return; }
       fovBoost = 16; refreshFov();
-      flyTo('home', { duration: 3.8 });                // a long, slow swoop down to the island
+      flyTo('home', { duration: 4.2 });
     },
   };
 }
