@@ -77,6 +77,10 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v4.5h4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="btn-label">Reset view</span>
       </button>
+      <button type="button" class="chip-btn chip-btn-exit" id="btn-exit-world" aria-label="Exit the world and return to the start">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5M14 16l4-4-4-4m4 4H9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="btn-label">Exit world</span>
+      </button>
       <button type="button" class="chip-btn" id="btn-sound" aria-pressed="false" aria-label="Sound">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z" fill="currentColor"/>
@@ -91,6 +95,7 @@
       </button>
     </div>
   </header>
+  <p class="presence-status" id="presence-status" aria-live="polite"></p>
 
   <!-- ============================ MENU ============================ -->
   <nav id="menu" class="menu" aria-label="Portfolio sections">
@@ -102,6 +107,9 @@
       <li><a href="#panel-astropulse" data-go="astropulse">Astropulse SMM</a></li>
       <li><a href="#panel-healthgis" data-go="healthgis">HealthGIS</a></li>
       <li><a href="#panel-crop" data-go="crop">CropIndia AI</a></li>
+      <li><a href="#hero" data-walk-to="house">Visit my house</a></li>
+      <li><a href="#hero" data-walk-to="station">Visit the railway station</a></li>
+      <li><a href="#hero" data-walk-to="airport">Visit the airport</a></li>
       <li><a href="#panel-education" data-go="education">Education</a></li>
       <li><a href="#panel-contact" data-go="contact">Contact</a></li>
       <li><a href="murarikumarcv.pdf" download="murarikumarcv.pdf" id="menu-cv" class="menu-cv">Download CV</a></li>
@@ -138,9 +146,16 @@
         <button type="button" class="btn btn-ghost" id="btn-revisit" hidden>Walk in again</button>
       </div>
     </section>
-    <button type="button" class="chip-btn details-pill" id="btn-details" hidden>Show details</button>
+    <button type="button" class="chip-btn details-pill" id="btn-details" aria-expanded="false" hidden>Show details</button>
 
-    <p id="hint" class="hint">Drag to look around, scroll or pinch to zoom, and tap a glowing marker to open it.</p>
+    <p id="hint" class="hint">Use the arrow keys or click the road to walk. On a phone, drag the joystick.</p>
+    <div class="walk-joystick" id="walk-joystick" role="group" aria-label="Walking joystick">
+      <div class="joystick-base" id="joystick-base">
+        <button type="button" class="joystick-knob" id="joystick-knob" aria-label="Drag to move the visitor">
+          <span aria-hidden="true">●</span>
+        </button>
+      </div>
+    </div>
 
     <!-- ============================ PANELS ============================ -->
     <div class="panels">
@@ -149,7 +164,6 @@
       <article class="panel" id="panel-about" tabindex="-1" aria-labelledby="t-about">
         <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
         <h2 id="t-about">About me</h2>
-        <p class="lead">I'm a Diploma student in Computer Science and Engineering who likes turning ideas into working software.</p>
         <p>I'm interested in software development, web technologies, Android applications and artificial intelligence. I learn best by building real things, so most of what I know comes from projects I've started, broken, fixed and shipped.</p>
         <h3>What I'm focused on</h3>
         <ul class="plain">
@@ -166,7 +180,6 @@
       <article class="panel" id="panel-skills" tabindex="-1" aria-labelledby="t-skills">
         <div class="panel-bar"><button type="button" class="chip-btn panel-close" data-close aria-label="Close and return to the world"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="btn-label">Close</span></button></div>
         <h2 id="t-skills">Skills</h2>
-        <p class="lead">The languages, platforms and tools I use to build things.</p>
         <div class="skill-group">
           <h3>Languages</h3>
           <ul class="chips" style="--c:#ff6b5e">
@@ -220,6 +233,7 @@
         <p class="panel-actions">
           <a class="btn btn-primary" data-link="nexoraLive" href="https://nexora-ai-webbuilder.vercel.app/" target="_blank" rel="noopener noreferrer">Open live demo</a>
           <a class="btn btn-ghost" data-link="nexoraRepo">View source code</a>
+          <button type="button" class="btn btn-ghost" data-walk-to="nexora">Walk to Nexora AI</button>
         </p>
         <p class="note" data-note-for="nexoraRepo">The source code link isn't set yet. Add the repository URL in config.js.</p>
         <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
@@ -253,6 +267,7 @@
         <p class="note">In the 3D world, double-click empty space to meet each person.</p>
         <p class="panel-actions">
           <a class="btn btn-primary" data-link="astropulseLive">Visit the website</a>
+          <button type="button" class="btn btn-ghost" data-walk-to="astropulse">Walk to Astropulse SMM</button>
         </p>
         <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
       </article>
@@ -274,6 +289,7 @@
         <p class="note">This section describes the plan, not a finished product.</p>
         <p class="panel-actions">
           <a class="btn btn-primary" data-link="healthgisLive">Live demo</a>
+          <button type="button" class="btn btn-ghost" data-walk-to="healthgis">Walk to HealthGIS</button>
         </p>
         <p class="note" data-note-for="healthgisLive">No demo yet. The link will appear here once the project is online.</p>
         <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>
@@ -297,6 +313,7 @@
         <p class="panel-actions">
           <a class="btn btn-primary" data-link="cropLive">Live demo</a>
           <a class="btn btn-ghost" data-link="cropRepo">View source code</a>
+          <button type="button" class="btn btn-ghost" data-walk-to="crop">Walk to CropIndia AI</button>
         </p>
         <p class="note" data-note-for="cropLive">No demo yet. The link will appear here once the project is online.</p>
         <p class="panel-actions"><button type="button" class="btn btn-ghost" data-close>Back to the world</button></p>

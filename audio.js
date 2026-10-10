@@ -26,13 +26,16 @@ export class SoundEngine {
   constructor() {
     this.ctx = null;
     this.enabled = false;
+    this.night = false;
     this.master = null;
     this.ambientBus = null;
+    this.nightBus = null;
     this.sfxBus = null;
     this.pad = [];
     this.chordIndex = 0;
     this.timers = [];
     this.noiseBuffer = null;
+    this._cricketTimer = 0;
     this._onVisibility = () => {
       if (!this.ctx || !this.enabled) return;
       if (document.hidden) this.ctx.suspend().catch(() => {});
@@ -57,6 +60,7 @@ export class SoundEngine {
       this.master.gain.setValueAtTime(this.master.gain.value, now);
       this.master.gain.linearRampToValueAtTime(0.85, now + 1.2);
       this._startAmbient();
+      this.setNight(this.night);
       return true;
     } catch (err) {
       console.warn('Audio could not start:', err);
@@ -74,6 +78,20 @@ export class SoundEngine {
     this.master.gain.linearRampToValueAtTime(0, now + 0.25);
     // Stop the pad after the fade so it does not use CPU while muted.
     setTimeout(() => { if (!this.enabled) this._stopPad(); }, 400);
+  }
+
+  setNight(on) {
+    this.night = !!on;
+    if (!this.ctx || !this.nightBus) return;
+    const now = this.ctx.currentTime;
+    this.nightBus.gain.cancelScheduledValues(now);
+    this.nightBus.gain.setTargetAtTime(this.night && this.enabled ? 0.65 : 0, now, 1.8);
+    if (this.padGain) {
+      this.padGain.gain.cancelScheduledValues(now);
+      this.padGain.gain.setTargetAtTime(this.night ? 0.045 : 0.11, now, 1.8);
+    }
+    clearTimeout(this._cricketTimer);
+    if (this.night && this.enabled) this._scheduleCricket();
   }
 
   /* ---------- short interface sounds ---------- */
@@ -122,8 +140,10 @@ export class SoundEngine {
 
     this.ambientBus = ctx.createGain(); this.ambientBus.gain.value = 0.55;
     this.sfxBus = ctx.createGain();     this.sfxBus.gain.value = 0.9;
+    this.nightBus = ctx.createGain();   this.nightBus.gain.value = 0;
     this.ambientBus.connect(this.master);
     this.sfxBus.connect(this.master);
+    this.nightBus.connect(this.ambientBus);
 
     // One shared buffer of noise, reused for wind and whooshes.
     const len = ctx.sampleRate * 2;
@@ -207,6 +227,24 @@ export class SoundEngine {
     this._sparkleTimer = setTimeout(next, 1800);
   }
 
+  _scheduleCricket() {
+    const chirp = () => {
+      if (!this.enabled || !this.night) return;
+      const t = this.ctx.currentTime;
+      const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(4800, t);
+      o.frequency.exponentialRampToValueAtTime(3400, t + 0.09);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.045, t + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+      o.connect(g); g.connect(this.nightBus); o.start(t); o.stop(t + 0.12);
+      this._cricketTimer = setTimeout(chirp, 600 + Math.random() * 1500);
+    };
+    clearTimeout(this._cricketTimer);
+    this._cricketTimer = setTimeout(chirp, 350);
+  }
+
   _stopPad() {
     if (this.pad.length) { try { this.pad[0].stop(); } catch (e) { /* already stopped */ } }
     this.pad = []; this.padOscs = null;
@@ -215,6 +253,7 @@ export class SoundEngine {
   _clearTimers() {
     this.timers.forEach(clearInterval); this.timers = [];
     clearTimeout(this._sparkleTimer);
+    clearTimeout(this._cricketTimer);
   }
 
   _note(freq, when, dur, vol, type, bus, dry) {

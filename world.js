@@ -20,7 +20,7 @@
    File map (search for these headings):
      0. helpers   1. renderer   2. sky + lights   3. terrain   4. nature
      5. landmarks 6. city       6.5 airport  6.6 railway   7. offices
-     8. people    8.5 district / lake / lighthouse   8.6 sky life
+     8. people    8.5 district and lake   8.6 sky life
      9. atmosphere  10. hotspots  11. camera + tour  12. loop
    ===================================================================== */
 
@@ -38,7 +38,10 @@ const ISLAND_RADIUS = 66;    // centre-to-edge size of the island (was 46: the n
 const OLD_RADIUS = 46;       // the original island: old scenery is still scattered inside this circle
 const TRACK_R = 44;          // radius of the circular railway track
 const STATION_A = 1.0;       // where the station is on the ring (radians)
-const OFFICE_SCALE = 1.0;    // how big the project offices are (1 = original, was 0.72)
+const OFFICE_SCALE = 1.25;
+const DAY_SECONDS = 300;     // daytime before the first night and between later nights
+const NIGHT_FADE_SECONDS = 20; // duration of each day/night fade
+const NIGHT_SECONDS = 180;    // length of each night
 
 /* ------------------------------------------------------------------ */
 /* 0. helpers                                                          */
@@ -146,7 +149,8 @@ export async function createWorld(opts) {
     canvas, config, quality = 'full', reducedMotion = false,
     onProgress = () => {}, onHotspotHover = () => {}, onHotspotClick = () => {},
     onFrame = () => {}, onUserInteract = () => {}, onWarning = () => {}, onError = () => {},
-    onSpeak = () => {}, onSpeakEnd = () => {}, onInput = () => {}, onVisitState = () => {},
+    onSpeak = () => {}, onSpeakEnd = () => {}, onInput = () => {}, onVisitState = () => {}, onNightChange = () => {},
+    onWalkArrive = () => {},
   } = opts;
 
   const S = WORLD_SCALE;
@@ -250,6 +254,10 @@ export async function createWorld(opts) {
   /* ---------------------------------------------------------------- */
   const animators = [];
   const always = [];
+  let nightAmount = 0, worldSeconds = 0;
+  const nightGlows = [];
+  const houseWindowMats = [];
+  let skyUniforms = null, hemiLight = null, fillLight = null, stars = null, moon = null, sunGlow = null;
   const matCache = new Map(), geoCache = new Map();
   const mat = (color, o = {}) => {
     const key = color + JSON.stringify(o);
@@ -301,6 +309,7 @@ export async function createWorld(opts) {
       top: { value: new THREE.Color('#2f78e6') }, mid: { value: new THREE.Color('#68b4ff') },
       horizon: { value: new THREE.Color('#d6edff') }, bottom: { value: new THREE.Color('#e3dcff') },
     };
+    skyUniforms = uniforms;
     const skyMat = new THREE.ShaderMaterial({
       uniforms, side: THREE.BackSide, depthWrite: false, fog: false, toneMapped: false,
       vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
@@ -317,7 +326,8 @@ export async function createWorld(opts) {
     const sky = new THREE.Mesh(new THREE.SphereGeometry(900, 24, 16), skyMat);
     sky.renderOrder = -10; sky.frustumCulled = false; scene.add(sky);
 
-    scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x9a86d0, 1.1));
+    hemiLight = new THREE.HemisphereLight(0xcfe6ff, 0x9a86d0, 1.1);
+    scene.add(hemiLight);
 
     sunLight = new THREE.DirectionalLight(0xffe9c4, 2.6);
     sunLight.position.set(30, 48, 24);
@@ -333,11 +343,75 @@ export async function createWorld(opts) {
     }
     scene.add(sunLight);
 
-    const fill = new THREE.DirectionalLight(0x9f8cff, 0.6);
-    fill.position.set(-8, 6, -10); scene.add(fill);
+    fillLight = new THREE.DirectionalLight(0x9f8cff, 0.6);
+    fillLight.position.set(-8, 6, -10); scene.add(fillLight);
 
     const sunDir = new THREE.Vector3(10, 16, 8).normalize().multiplyScalar(800);
-    glow(scene, 0xfff2c8, 190, 0.7, sunDir.x, sunDir.y, sunDir.z);
+    sunGlow = glow(scene, 0xfff2c8, 190, 0.7, sunDir.x, sunDir.y, sunDir.z);
+    const starPositions = new Float32Array(720);
+    for (let i = 0; i < starPositions.length; i += 3) {
+      const y = 1 - 2 * (i / 3) / (starPositions.length / 3);
+      const a = Math.sqrt(1 - y * y) * 780, theta = i * 2.399963;
+      starPositions[i] = Math.cos(theta) * a;
+      starPositions[i + 1] = y * 780;
+      starPositions[i + 2] = Math.sin(theta) * a;
+    }
+    const starGeo = new THREE.BufferGeometry();
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+    stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: '#dce8ff', size: 2.5, transparent: true, opacity: 0, depthWrite: false, fog: false }));
+    stars.frustumCulled = false; scene.add(stars);
+    moon = new THREE.Mesh(new THREE.SphereGeometry(20, 20, 16), new THREE.MeshBasicMaterial({ color: '#e8edff', transparent: true, opacity: 0 }));
+    moon.position.set(-270, 235, -520); scene.add(moon);
+  });
+  const nightColors = {
+    top: new THREE.Color('#080f2b'), mid: new THREE.Color('#172c56'),
+    horizon: new THREE.Color('#493f68'), bottom: new THREE.Color('#101a36'),
+    clear: new THREE.Color('#101a36'), fog: new THREE.Color('#17213e'),
+    sun: new THREE.Color('#8793c5'), hemiSky: new THREE.Color('#46557e'),
+    hemiGround: new THREE.Color('#24243f'), fill: new THREE.Color('#626aab'),
+  };
+  const dayColors = {
+    top: new THREE.Color('#2f78e6'), mid: new THREE.Color('#68b4ff'),
+    horizon: new THREE.Color('#d6edff'), bottom: new THREE.Color('#e3dcff'),
+    clear: new THREE.Color('#cfe6ff'), fog: new THREE.Color('#cfe6ff'),
+    sun: new THREE.Color('#ffe9c4'), hemiSky: new THREE.Color('#cfe6ff'),
+    hemiGround: new THREE.Color('#9a86d0'), fill: new THREE.Color('#9f8cff'),
+  };
+  const blended = new THREE.Color();
+  let nightState = false;
+  always.push((dt) => {
+    worldSeconds += dt;
+    const cycle = DAY_SECONDS + NIGHT_FADE_SECONDS * 2 + NIGHT_SECONDS;
+    const phase = worldSeconds % cycle;
+    let nextNight = 0;
+    if (phase >= DAY_SECONDS && phase < DAY_SECONDS + NIGHT_FADE_SECONDS) {
+      nextNight = smoothstep(0, 1, (phase - DAY_SECONDS) / NIGHT_FADE_SECONDS);
+    } else if (phase >= DAY_SECONDS + NIGHT_FADE_SECONDS && phase < DAY_SECONDS + NIGHT_FADE_SECONDS + NIGHT_SECONDS) {
+      nextNight = 1;
+    } else if (phase >= DAY_SECONDS + NIGHT_FADE_SECONDS + NIGHT_SECONDS) {
+      nextNight = 1 - smoothstep(0, 1, (phase - DAY_SECONDS - NIGHT_FADE_SECONDS - NIGHT_SECONDS) / NIGHT_FADE_SECONDS);
+    }
+    nightAmount = nextNight;
+    if ((nightAmount >= 0.5) !== nightState) {
+      nightState = nightAmount >= 0.5;
+      onNightChange(nightState);
+    }
+    ['top', 'mid', 'horizon', 'bottom'].forEach((key) => skyUniforms[key].value.copy(dayColors[key]).lerp(nightColors[key], nightAmount));
+    renderer.setClearColor(blended.copy(dayColors.clear).lerp(nightColors.clear, nightAmount), 1);
+    scene.fog.color.copy(dayColors.fog).lerp(nightColors.fog, nightAmount);
+    hemiLight.color.copy(dayColors.hemiSky).lerp(nightColors.hemiSky, nightAmount);
+    hemiLight.groundColor.copy(dayColors.hemiGround).lerp(nightColors.hemiGround, nightAmount);
+    hemiLight.intensity = lerp(1.1, 0.28, nightAmount);
+    sunLight.color.copy(dayColors.sun).lerp(nightColors.sun, nightAmount);
+    sunLight.intensity = lerp(2.6, 0.12, nightAmount);
+    fillLight.color.copy(dayColors.fill).lerp(nightColors.fill, nightAmount);
+    fillLight.intensity = lerp(0.6, 0.18, nightAmount);
+    renderer.toneMappingExposure = lerp(1.05, 0.62, nightAmount);
+    houseWindowMats.forEach((m) => { m.emissiveIntensity = lerp(0.08, 1.25, nightAmount); });
+    stars.material.opacity = nightAmount;
+    moon.material.opacity = nightAmount;
+    sunGlow.material.opacity = 0.7 * (1 - nightAmount);
+    nightGlows.forEach((item) => { item.material.opacity = item.dayOpacity + (item.nightOpacity - item.dayOpacity) * nightAmount; });
   });
 
   /* ---------------------------------------------------------------- */
@@ -346,7 +420,7 @@ export async function createWorld(opts) {
   const CITY = { x0: -11.5, x1: 11.5, z0: 14.5, z1: 25.8 };
   const CITY2 = { x0: -30.5, x1: -13.0, z0: 15.0, z1: 28.0 };       // the west district
   const AVENUE_Z = 22.6;
-  const AIRPORT = { x0: -34.5, x1: -20.5, z0: -9.5, z1: 2.5 };
+  const AIRPORT = { x0: -39.0, x1: -17.0, z0: -13.0, z1: 6.0 };
   const rectMask = (x, z, r, m) => 1 - smoothstep(0, m, Math.hypot(Math.max(r.x0 - x, 0, x - r.x1), Math.max(r.z0 - z, 0, z - r.z1)));
 
   // Hills: [x, z, height, radius].
@@ -370,11 +444,10 @@ export async function createWorld(opts) {
     { x: -9.6, z: -1.2, r: 2.0, y: 0 },
     { x: -5.6, z: 0.3, r: 2.0, y: -0.18 },
     { x: -1.4, z: 10.8, r: 1.5, y: 0 },
-    { x: -15.5, z: 7.5, r: 6.0, y: 0 },
+    { x: -15.5, z: 9.0, r: 6.0, y: 0 },
     { x: 24.0, z: -4.0, r: 6.0, y: 0 },
     { x: 31.0, z: 8.0, r: 5.2, y: -0.18 },   // the lake
-    { x: 29.0, z: 25.0, r: 2.6, y: 0 },      // the lighthouse (moved inward for the railway)
-    { x: Math.cos(STATION_A) * (TRACK_R - 3.4), z: Math.sin(STATION_A) * (TRACK_R - 3.4), r: 3.6, y: 0 },   // the station
+    { x: Math.cos(STATION_A) * (TRACK_R - 3.4), z: Math.sin(STATION_A) * (TRACK_R - 3.4), r: 9.0, y: 0 },   // the station
   ];
   const roadPts = [
     [-21, 1.2], [-17, 2.2], [-13.4, 3.0], [-10, 5.5], [-6, 4.2], [-2.5, 5.8], [1.5, 4.5], [4.5, 2.5], [7.5, 4.0], [8.6, 7.4],
@@ -802,9 +875,11 @@ export async function createWorld(opts) {
     const skull = sphere(head, 0.135, 0, 0, 0, skin); skull.scale.set(0.95, 1.08, 0.92);
     sphere(head, 0.03, 0, -0.01, 0.126, skin, false).scale.set(0.5, 1, 0.8);
     sphere(head, 0.03, 0, -0.01, -0.126, skin, false).scale.set(0.5, 1, 0.8);
+    const pupils = [];
     [0.05, -0.05].forEach((z) => {
       const white = smallPart(head, geo('eyeW', () => new THREE.SphereGeometry(0.026, 12, 8)), soft('#ffffff'), 0.109, 0.014, z); white.scale.set(0.7, 1, 0.95);
-      smallPart(head, geo('eyeP', () => new THREE.SphereGeometry(0.0145, 10, 8)), soft('#241f4d'), 0.124, 0.012, z);
+      const pupil = smallPart(head, geo('eyeP', () => new THREE.SphereGeometry(0.0145, 10, 8)), soft('#241f4d'), 0.124, 0.012, z);
+      pupils.push({ mesh: pupil, y: pupil.position.y, z: pupil.position.z });
       smallPart(head, geo('eyeS', () => new THREE.SphereGeometry(0.005, 6, 5)), soft('#ffffff'), 0.134, 0.02, z + 0.004);
       const brow = smallPart(head, geo('brow', () => new THREE.BoxGeometry(0.012, 0.011, 0.05)), soft(hairC), 0.108, 0.058, z); brow.rotation.x = z > 0 ? 0.12 : -0.12;
       smallPart(head, geo('cheek', () => new THREE.SphereGeometry(0.02, 8, 6)), soft('#f7a090'), 0.1, -0.03, z * 1.55).scale.set(0.5, 0.7, 1);
@@ -871,7 +946,7 @@ export async function createWorld(opts) {
       box(upper, 0.11, 0.1, 0.19, -0.2, 0.32, 0, o.backpack);
       [0.1, -0.1].forEach((z) => box(upper, 0.02, 0.26, 0.035, 0.1, 0.2, z, '#2b2850').castShadow = false);
     }
-    return { group: g, upper, head, armL: aL.arm, armR: aR.arm, elbowL: aL.elbow, elbowR: aR.elbow, legL: lL.leg, legR: lR.leg, shinL: lL.shin, shinR: lR.shin };
+    return { group: g, upper, head, pupils, armL: aL.arm, armR: aR.arm, elbowL: aL.elbow, elbowR: aR.elbow, legL: lL.leg, legR: lR.leg, shinL: lL.shin, shinR: lR.shin };
   }
 
   /* ---------------------------------------------------------------- */
@@ -942,6 +1017,8 @@ export async function createWorld(opts) {
   }
 
   const agents = [];
+  let playerAgent = null, playerGoal = null, walkingEnabled = false, homeResident = null, homeScheduledVisible = false;
+  let homeVisitActive = false;
   let teamSink = null;       // while set, every new agent is also added to this office's team list
   let aboutAgent = null;     // the "About me" person
   function makeAgent(person, parent, o) {
@@ -950,7 +1027,9 @@ export async function createWorld(opts) {
     const a = {
       p: person, ground: o.ground || (() => 0), steps: o.steps, i: 0, timer: 0, speed: o.speed || 0.9,
       x: o.x || 0, z: o.z || 0, heading: h0, want: h0, wp: 0, ph: (agents.length * 1.7) % TAU, pose: 'idle',
-      hidden: false, carry: false, tick: o.tick || null, cur: {},
+      hidden: !!o.hidden, carry: false, tick: o.tick || null, shift: o.shift || null,
+      nightHome: o.nightHome || (o.shift === 'day' && parent !== W ? [0, 5.5] : null),
+      offShift: false, daySchedule: null, cur: {},
     };
     JOINTS.forEach((j) => { a.cur[j] = 0; });
     agents.push(a);
@@ -958,7 +1037,38 @@ export async function createWorld(opts) {
     advanceAgent(a, 0.0001, 0);
     applyPose(a, 1, 0, true);
     placeAgent(a, 0);
-    animators.push((dt, t) => { advanceAgent(a, dt, t); applyPose(a, dt, t, false); placeAgent(a, dt); });
+    animators.push((dt, t) => {
+      const asleep = (a.shift === 'day' && nightAmount >= 0.5) || (a.shift === 'night' && nightAmount < 0.5);
+      if (a.shift === 'day' && asleep && !a.offShift) {
+        a.offShift = true;
+        if (a.nightHome) {
+          a.daySchedule = { steps: a.steps, i: a.i, timer: a.timer, pose: a.pose };
+          a.steps = [{ go: a.nightHome }, { do: (agent) => { agent.hidden = true; } }, { wait: Infinity }];
+          a.i = 0; a.timer = 0; a.hidden = false;
+        } else {
+          a.hidden = true;
+        }
+      } else if (a.shift === 'day' && !asleep && a.offShift) {
+        if (a.daySchedule) {
+          a.steps = a.daySchedule.steps; a.i = a.daySchedule.i;
+          a.timer = a.daySchedule.timer; a.pose = a.daySchedule.pose;
+          a.daySchedule = null;
+        }
+        a.hidden = false;
+        a.offShift = false;
+      }
+      if (asleep) {
+        if (a.shift === 'day' && a.nightHome && !a.hidden) {
+          advanceAgent(a, dt, t);
+          applyPose(a, dt, t, false);
+        } else {
+          a.hidden = true;
+        }
+        placeAgent(a, dt);
+        return;
+      }
+      advanceAgent(a, dt, t); applyPose(a, dt, t, false); placeAgent(a, dt);
+    });
     return a;
   }
   function drive(a, steps) { a.steps = steps.concat([{ wait: Infinity, pose: 'idle' }]); a.i = 0; a.timer = 0; }
@@ -1017,7 +1127,10 @@ export async function createWorld(opts) {
     box(g, 0.4, 0.62, 0.02, 0, 0.31, 0.752, '#241f4d');
     const pivot = new THREE.Group(); pivot.position.set(-0.17, 0, 0.77); g.add(pivot);
     box(pivot, 0.34, 0.58, 0.04, 0.17, 0.3, 0, '#6c58cf');
-    [-0.58, 0.58].forEach((wx) => box(g, 0.3, 0.28, 0.04, wx, 0.58, 0.76, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.3 }));
+    [-0.58, 0.58].forEach((wx) => {
+      const win = box(g, 0.3, 0.28, 0.04, wx, 0.58, 0.76, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.08 });
+      houseWindowMats.push(win.material);
+    });
     box(g, 0.22, 0.45, 0.22, 0.55, 1.45, -0.2, '#8a5a44');
     const d = { pivot, open: 0, target: 0 }; doors.push(d);
     const dx = Math.sin(face), dz = Math.cos(face);
@@ -1099,8 +1212,18 @@ export async function createWorld(opts) {
       }
     });
     crops.castShadow = true; g.add(crops);
-    for (let i = 0; i < 9; i++) box(g, 0.07, 0.42, 0.07, -1.5 + i * 0.5, 0.21, 2.95, '#b9825f');
-    box(g, 4.1, 0.05, 0.05, 0.5, 0.33, 2.95, '#c9966f'); box(g, 4.1, 0.05, 0.05, 0.5, 0.16, 2.95, '#c9966f');
+    for (let i = 0; i < 9; i++) {
+      const x = -1.5 + i * 0.5;
+      if (x > 0 && x < 1) continue;
+      box(g, 0.07, 0.42, 0.07, x, 0.21, 2.95, '#b9825f');
+    }
+    [-0.2, 1.8].forEach((x) => {
+      box(g, 1.6, 0.05, 0.05, x, 0.33, 2.95, '#c9966f');
+      box(g, 1.6, 0.05, 0.05, x, 0.16, 2.95, '#c9966f');
+    });
+    [-0.02, 1.02].forEach((x) => box(g, 0.12, 1.35, 0.12, x, 0.68, 2.95, '#8a5a44'));
+    box(g, 1.12, 0.12, 0.16, 0.5, 1.38, 2.95, '#e8b23a');
+    box(g, 0.9, 0.05, 0.12, 0.5, 1.46, 2.95, '#fff1dc');
 
     const mill = new THREE.Group(); mill.position.set(-2.6, 0, 0.3); g.add(mill);
     cyl(mill, 0.34, 0.55, 1.7, 8, 0, 0.85, 0, '#fff1dc');
@@ -1140,21 +1263,15 @@ export async function createWorld(opts) {
     const planeG = new THREE.Group(); W.add(planeG);
     const plane = new THREE.Mesh(geo('plane', () => new THREE.ConeGeometry(0.14, 0.55, 3)), new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true, emissive: '#cfe6ff', emissiveIntensity: 0.3 }));
     plane.castShadow = true; plane.rotation.z = -Math.PI / 2; plane.scale.set(1, 1, 0.35); planeG.add(plane);
+    let planeOrbit = 0;
     animators.push((dt, t) => {
       flag.rotation.x = -0.4 + Math.sin(t * 2) * 0.25;
-      const a = t * 0.7;
+      if (nightAmount < 0.5) planeOrbit += dt * 0.7;
+      const a = planeOrbit;
       planeG.position.set(10.8 + Math.cos(a) * 1.2, 2.2 + Math.sin(t * 1.6) * 0.15, 6.6 + Math.sin(a) * 1.2);
       planeG.rotation.y = Math.atan2(-Math.cos(a), -Math.sin(a));
     });
 
-    const s = new THREE.Group(); s.position.set(-9.6, 0, -1.2); s.rotation.y = 0.5; W.add(s);
-    box(s, 1.9, 0.95, 1.25, 0, 0.48, 0, '#fff1dc'); prism(s, 1.1, 1.3, 0, 1.25, 0, '#ff6b5e', 0.55);
-    box(s, 0.34, 0.55, 0.04, 0, 0.28, 0.64, '#6c58cf');
-    [-0.6, 0.6].forEach((x) => box(s, 0.32, 0.3, 0.04, x, 0.6, 0.64, '#bfe4ff'));
-    box(s, 0.4, 0.4, 0.4, 0, 1.85, 0, '#fff1dc'); cone(s, 0.34, 0.35, 4, 0, 2.25, 0, '#6c58cf').rotation.y = Math.PI / 4;
-    cyl(s, 0.03, 0.03, 1.6, 5, 1.4, 0.8, 0.7, '#d8d2ff');
-    const sflag = box(s, 0.5, 0.28, 0.03, 1.65, 1.5, 0.7, '#ff6b5e');
-    animators.push((dt, t) => { sflag.rotation.y = Math.sin(t * 3) * 0.25; });
   });
 
   /* ---------------------------------------------------------------- */
@@ -1166,9 +1283,11 @@ export async function createWorld(opts) {
     cyl(lamp, 0.03, 0.045, 1.05, 6, 0, 0.52, 0, '#2b2850');
     box(lamp, 0.22, 0.04, 0.04, 0.08, 1.04, 0, '#2b2850');
     ball(lamp, 0.09, 0.16, 0.98, 0, '#fff3b0', { emissive: '#ffd36e', emissiveIntensity: 1 }).castShadow = false;
-    bulbGlows.push(glow(lamp, 0xffd36e, 1.1, 0.45, 0.16, 0.98, 0));
+    const lampGlow = glow(lamp, 0xffd36e, 1.1, 0.08, 0.16, 0.98, 0);
+    bulbGlows.push(lampGlow);
+    nightGlows.push({ material: lampGlow.material, dayOpacity: 0.08, nightOpacity: 0.9 });
   }
-  const houseV1 = { value: null }, houseC1 = { value: null }, houseC2 = { value: null };
+  const houseV1 = { value: null };
 
   await stage(0.6, 'Raising the city', () => {
     slab(W, 0, AVENUE_Z, 25, 1.7, '#3f3d66', 0.04, 0.06);
@@ -1181,40 +1300,6 @@ export async function createWorld(opts) {
     W.add(dash);
 
     houseV1.value = makeHouse(-1.4, 10.8, Math.PI, '#ffe08a', '#e8564a');
-    houseC1.value = makeHouse(1.5, 19.3, 0, '#ffb3c7', '#6c58cf');
-    houseC2.value = makeHouse(4.2, 19.3, 0, '#9ff3ff', '#ff6b5e');
-
-    const winTex = canvasTexture((g, s) => {
-      g.fillStyle = '#dcd6f5'; g.fillRect(0, 0, s, s);
-      g.fillStyle = '#6ad0ff'; g.fillRect(34, 30, 60, 68);
-      g.fillStyle = 'rgba(255,255,255,0.55)'; g.fillRect(34, 30, 60, 14);
-    }, 128);
-    winTex.wrapS = winTex.wrapT = THREE.RepeatWrapping;
-    function makeTower(x, z, w, dd, h, tint, roofColor) {
-      const sideMat = (len) => {
-        const t = winTex.clone(); t.needsUpdate = true; t.repeat.set(Math.max(1, Math.round(len * 1.1)), Math.max(1, Math.round(h * 1.1)));
-        return new THREE.MeshLambertMaterial({ color: tint, map: t });
-      };
-      const roof = new THREE.MeshLambertMaterial({ color: roofColor });
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, dd), [sideMat(dd), sideMat(dd), roof, roof, sideMat(w), sideMat(w)]);
-      m.position.set(x, h / 2, z); m.castShadow = true; m.receiveShadow = true; W.add(m);
-      box(W, w * 0.5, 0.3, dd * 0.5, x, h + 0.15, z, '#8a84b8');
-      return m;
-    }
-    makeTower(1.0, 16.2, 2.0, 2.0, 6.4, '#cdbff5', '#4b3fa6');
-    makeTower(3.9, 16.5, 2.2, 2.0, 4.6, '#bff0ee', '#2b2850');
-    makeTower(10.2, 16.8, 2.6, 2.4, 3.8, '#ffd0de', '#6c58cf');
-    cyl(W, 0.03, 0.04, 1.2, 5, 1.0, 7.3, 16.2, '#d8d2ff');
-    ball(W, 0.08, 1.0, 7.95, 16.2, '#ff6b5e', { emissive: '#ff6b5e', emissiveIntensity: 1 });
-
-    const cafe = new THREE.Group(); cafe.position.set(10.2, 0, 20.1); W.add(cafe);
-    box(cafe, 2.2, 1.3, 1.6, 0, 0.65, 0, '#ffe08a');
-    box(cafe, 2.4, 0.12, 1.8, 0, 1.36, 0, '#8a5a44');
-    box(cafe, 2.2, 0.1, 0.55, 0, 1.0, 1.05, '#ff6b5e').rotation.x = 0.35;
-    box(cafe, 0.5, 0.8, 0.04, 0.5, 0.4, 0.82, '#6c58cf');
-    box(cafe, 0.8, 0.5, 0.04, -0.55, 0.65, 0.82, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.35 });
-    box(cafe, 0.9, 0.22, 0.04, 0, 1.2, 0.83, '#241f4d');
-
     function makeCar(color) {
       const c = new THREE.Group();
       box(c, 0.95, 0.24, 0.46, 0, 0.24, 0, color);
@@ -1233,6 +1318,7 @@ export async function createWorld(opts) {
     ];
     cars.forEach((c) => { c.g.rotation.y = c.dir > 0 ? 0 : Math.PI; c.g.position.set(c.x, 0.05, c.z); });
     animators.push((dt) => cars.forEach((c) => {
+      if (nightAmount >= 0.5) return;
       c.x += c.dir * c.sp * dt;
       if (c.x > 12) c.x = -12; else if (c.x < -12) c.x = 12;
       c.g.position.x = c.x;
@@ -1260,7 +1346,7 @@ export async function createWorld(opts) {
       const x = p.x + tg.z * sd, z = p.z - tg.x * sd;
       if (Math.hypot(x, z) < R - 2.5 && z < CITY.z0 - 0.5) addLamp(x, z);
     });
-    animators.push((dt, t) => bulbGlows.forEach((b, i) => { b.material.opacity = 0.4 + Math.sin(t * 2 + i) * 0.08; }));
+    animators.push((dt, t) => bulbGlows.forEach((b, i) => { b.material.opacity = nightAmount >= 0.5 ? 0.82 + Math.sin(t * 2 + i) * 0.08 : 0.08; }));
     animators.push((dt) => doors.forEach((d) => { d.open += (d.target - d.open) * Math.min(1, dt * 4); d.pivot.rotation.y = -1.4 * d.open; }));
   });
 
@@ -1268,32 +1354,132 @@ export async function createWorld(opts) {
   /* 6.5 the airport: the plane takes off, flies a lap and lands       */
   /* ---------------------------------------------------------------- */
   await stage(0.63, 'Building the airport', () => {
-    const RUNWAY_Z = AIRPORT.z1 - 6.0;
-    const RX0 = AIRPORT.x0 + 1.2, RX1 = AIRPORT.x1 - 5.0;
+    const RUNWAY_Z = AIRPORT.z0 + 5.5;
+    const RX0 = AIRPORT.x0 + 1.2, RX1 = AIRPORT.x1 - 4.0;
 
-    slab(W, (RX0 + RX1) / 2, RUNWAY_Z, RX1 - RX0 + 2.6, 4.3, '#5fda8a', 0.02, 0.04);
-    slab(W, (RX0 + RX1) / 2, RUNWAY_Z, RX1 - RX0 + 2, 3.6, '#4a4766', 0.035, 0.06);
+    slab(W, (RX0 + RX1) / 2, RUNWAY_Z, RX1 - RX0 + 2.6, 5.2, '#5fda8a', 0.02, 0.04);
+    slab(W, (RX0 + RX1) / 2, RUNWAY_Z, RX1 - RX0 + 2, 4.3, '#4a4766', 0.035, 0.06);
     const dashN = 14, rd = new THREE.InstancedMesh(geo('box', () => new THREE.BoxGeometry(1, 1, 1)), new THREE.MeshLambertMaterial({ color: '#fff1dc' }), dashN);
     const dd = new THREE.Object3D();
     for (let i = 0; i < dashN; i++) {
       dd.position.set(RX0 + 0.5 + i * ((RX1 - RX0 - 1) / (dashN - 1)), 0.07, RUNWAY_Z);
-      dd.scale.set(0.5, 0.012, 0.1); dd.updateMatrix(); rd.setMatrixAt(i, dd.matrix);
+      dd.scale.set(0.38, 0.012, 0.12); dd.updateMatrix(); rd.setMatrixAt(i, dd.matrix);
     }
     W.add(rd);
-    slab(W, RX1 + 2.0, AIRPORT.z1 - 2.0, 4.2, 3.6, '#8a84b8', 0.03, 0.06);
+    for (let end = 0; end < 2; end++) {
+      const x = end ? RX1 - 0.25 : RX0 + 0.25;
+      for (let i = 0; i < 6; i++) slab(W, x, RUNWAY_Z - 1.65 + i * 0.66, 0.32, 0.34, '#fff1dc', 0.07, 0.025);
+    }
+    const runwayLamps = [];
+    [RUNWAY_Z - 2.35, RUNWAY_Z + 2.35].forEach((z) => {
+      for (let i = 0; i < 17; i++) {
+        const x = RX0 + i * ((RX1 - RX0) / 16);
+        const lamp = ball(W, 0.07, x, 0.14, z, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.8 });
+        lamp.castShadow = false; runwayLamps.push(glow(W, '#9fd8ff', 0.45, 0.12, x, 0.18, z));
+      }
+    });
+    runwayLamps.forEach((g) => nightGlows.push({ material: g.material, dayOpacity: 0.03, nightOpacity: 0.9 }));
 
-    const term = new THREE.Group(); term.position.set(RX1 + 2.2, 0, AIRPORT.z1 + 0.2); W.add(term);
-    box(term, 4.4, 1.3, 2.0, 0, 0.65, 0, '#eae6ff');
-    box(term, 4.6, 0.12, 2.2, 0, 1.36, 0, '#4b3fa6');
-    box(term, 4.0, 0.9, 0.04, 0, 0.75, -1.0, '#bfe4ff', { transparent: true, opacity: 0.35, depthWrite: false }).castShadow = false;
-    box(term, 0.9, 0.22, 0.04, 0, 1.15, -1.02, '#241f4d');
-    const ctrl = new THREE.Group(); ctrl.position.set(1.6, 0, 0.6); term.add(ctrl);
-    cyl(ctrl, 0.3, 0.42, 2.6, 8, 0, 1.3, 0, '#8a84b8');
-    cyl(ctrl, 0.55, 0.55, 0.6, 8, 0, 2.9, 0, '#4fd1e0', { emissive: '#2a9aa8', emissiveIntensity: 0.3 });
-    const beacon = ball(ctrl, 0.1, 0, 3.3, 0, '#ff4d4d', { emissive: '#ff2d2d', emissiveIntensity: 1 }); beacon.castShadow = false;
-    const beaconGlow = glow(ctrl, 0xff4d4d, 1.3, 0.6, 0, 3.3, 0);
+    // Taxiway, apron, and terminal-side parking.
+    slab(W, RX1 - 1.0, RUNWAY_Z + 2.9, 2.2, 6.1, '#87839a', 0.035, 0.055);
+    slab(W, RX1 - 4.7, RUNWAY_Z + 5.6, 8.3, 5.1, '#77758a', 0.035, 0.06);
+    for (let i = 0; i < 8; i++) {
+      slab(W, RX1 - 8.2 + i * 1.0, RUNWAY_Z + 5.55, 0.55, 0.08, '#ffe08a', 0.075, 0.018);
+    }
+    slab(W, AIRPORT.x1 - 1.9, AIRPORT.z1 - 2.1, 4.8, 3.2, '#625f73', 0.035, 0.055);
+    for (let i = 0; i < 5; i++) {
+      slab(W, AIRPORT.x1 - 3.6 + i * 0.8, AIRPORT.z1 - 2.1, 0.045, 2.6, '#fff1dc', 0.07, 0.015);
+    }
+    // Low perimeter fencing, with a broad vehicle entrance along the south side.
+    const fenceRail = (x0, z0, x1, z1) => {
+      const length = Math.hypot(x1 - x0, z1 - z0), count = Math.ceil(length / 1.2);
+      const angle = -Math.atan2(z1 - z0, x1 - x0);
+      for (let i = 0; i <= count; i++) {
+        const f = i / count;
+        box(W, 0.08, 0.72, 0.08, lerp(x0, x1, f), 0.36, lerp(z0, z1, f), '#8a84b8');
+      }
+      [0.2, 0.55].forEach((y) => {
+        const rail = box(W, length, 0.035, 0.035, (x0 + x1) / 2, y, (z0 + z1) / 2, '#b8b4c9');
+        rail.rotation.y = angle;
+      });
+    };
+    fenceRail(AIRPORT.x0, AIRPORT.z0, AIRPORT.x1, AIRPORT.z0);
+    fenceRail(AIRPORT.x0, AIRPORT.z0, AIRPORT.x0, AIRPORT.z1);
+    fenceRail(AIRPORT.x1, AIRPORT.z0, AIRPORT.x1, AIRPORT.z1);
+    fenceRail(AIRPORT.x0, AIRPORT.z1, AIRPORT.x1 - 7.0, AIRPORT.z1);
+    fenceRail(AIRPORT.x1 - 3.0, AIRPORT.z1, AIRPORT.x1, AIRPORT.z1);
 
-    const sock = new THREE.Group(); sock.position.set(RX0 - 0.6, 0, RUNWAY_Z + 2.4); W.add(sock);
+    const term = new THREE.Group(); term.position.set(RX1 - 1.6, 0, AIRPORT.z1 - 1.8); W.add(term);
+    box(term, 4.6, 1.7, 2.0, 0, 0.85, 0, '#eae6ff');
+    box(term, 4.9, 0.14, 2.4, 0, 1.75, 0, '#4b3fa6');
+    box(term, 4.2, 1.15, 0.045, 0, 0.92, 1.02, '#bfe4ff', { transparent: true, opacity: 0.48, depthWrite: false, emissive: '#2d5368', emissiveIntensity: 0.4 }).castShadow = false;
+    [-1.4, -0.7, 0, 0.7, 1.4].forEach((x) => box(term, 0.045, 1.15, 0.07, x, 0.92, 1.05, '#fff1dc'));
+    box(term, 5.35, 0.12, 1.0, 0, 1.88, 1.25, '#4b3fa6');
+    [-2.3, 2.3].forEach((x) => box(term, 0.08, 0.48, 0.1, x, 1.61, 1.6, '#8a84b8'));
+    box(term, 0.85, 0.2, 0.04, 0, 1.55, 1.08, '#241f4d');
+    box(term, 5.2, 0.12, 3.2, 0, 1.95, -0.25, '#fff1dc');
+    box(term, 1.65, 0.54, 0.08, 0, 1.38, 1.14, '#241f4d');
+    box(term, 1.47, 0.07, 0.03, 0, 1.53, 1.19, '#ffe08a');
+    [-0.45, 0.45].forEach((x) => box(term, 0.025, 0.25, 0.025, x, 1.31, 1.19, '#bfe4ff'));
+    const airportSignTex = canvasTextureWH(512, 128, (g, w, h) => {
+      g.fillStyle = '#241f4d'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#ffe08a'; g.font = '800 72px system-ui, "Segoe UI", Arial, sans-serif';
+      g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('AIRPORT', w / 2, h / 2);
+    });
+    const airportSign = new THREE.Mesh(new THREE.PlaneGeometry(2.5, 0.62), new THREE.MeshBasicMaterial({ map: airportSignTex, fog: false }));
+    airportSign.position.set(0, 1.35, 1.08); term.add(airportSign);
+    const terminalGlow = glow(term, 0xffd36e, 2.8, 0.05, 0, 1.0, 1.4);
+    nightGlows.push({ material: terminalGlow.material, dayOpacity: 0.04, nightOpacity: 0.85 });
+
+    // Two parked aircraft with telescoping-looking passenger bridges.
+    const parkedPlane = (x, z, color) => {
+      const p = new THREE.Group(); p.position.set(x, 0.08, z); W.add(p);
+      const fus = cyl(p, 0.13, 0.16, 1.65, 10, 0, 0.4, 0, '#fff8ec'); fus.rotation.z = Math.PI / 2;
+      cone(p, 0.13, 0.42, 10, 0.98, 0.4, 0, '#fff8ec').rotation.z = -Math.PI / 2;
+      box(p, 1.45, 0.045, 0.28, 0.04, 0.32, 0, color);
+      box(p, 0.045, 0.12, 1.45, -0.12, 0.57, 0, color);
+      box(p, 0.045, 0.32, 0.4, -0.7, 0.55, 0, color);
+      box(p, 0.36, 0.08, 0.13, 0.7, 0.46, 0, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.45 });
+      return p;
+    };
+    parkedPlane(RX1 - 7.6, RUNWAY_Z + 4.8, '#8f7fe6');
+    parkedPlane(RX1 - 4.2, RUNWAY_Z + 4.8, '#4fd1e0');
+    [-5.4, -2.0].forEach((x) => {
+      box(term, 0.42, 0.18, 5.1, x, 1.15, -0.45, '#b7b3c8');
+      box(term, 0.055, 0.52, 5.1, x - 0.2, 1.46, -0.45, '#bfe4ff', { transparent: true, opacity: 0.45, depthWrite: false });
+      box(term, 0.055, 0.52, 5.1, x + 0.2, 1.46, -0.45, '#bfe4ff', { transparent: true, opacity: 0.45, depthWrite: false });
+      cyl(term, 0.045, 0.045, 0.95, 6, x, 0.55, -0.45, '#8a84b8');
+    });
+
+    const ctrl = new THREE.Group(); ctrl.position.set(1.55, 0, -0.1); term.add(ctrl);
+    cyl(ctrl, 0.34, 0.52, 3.2, 8, 0, 1.6, 0, '#8a84b8');
+    box(ctrl, 1.05, 0.72, 0.95, 0, 3.55, 0, '#4fd1e0', { transparent: true, opacity: 0.45, depthWrite: false });
+    box(ctrl, 1.2, 0.12, 1.1, 0, 3.98, 0, '#4b3fa6');
+    const beacon = ball(ctrl, 0.1, 0, 4.14, 0, '#ff4d4d', { emissive: '#ff2d2d', emissiveIntensity: 1 }); beacon.castShadow = false;
+    const beaconGlow = glow(ctrl, 0xff4d4d, 1.3, 0.08, 0, 4.14, 0);
+    nightGlows.push({ material: beaconGlow.material, dayOpacity: 0.08, nightOpacity: 0.95 });
+    const beaconRotor = new THREE.Group(); beaconRotor.position.y = 4.14; ctrl.add(beaconRotor);
+    box(beaconRotor, 0.75, 0.025, 0.04, 0.38, 0, 0, '#ff4d4d', { emissive: '#ff2d2d', emissiveIntensity: 0.9 });
+    // Fuel service and luggage carts parked beside the apron.
+    const truck = new THREE.Group(); truck.position.set(RX1 - 0.2, 0, RUNWAY_Z + 5.3); W.add(truck);
+    box(truck, 1.05, 0.42, 0.48, 0, 0.32, 0, '#ff6b5e');
+    box(truck, 0.42, 0.34, 0.44, 0.22, 0.67, 0, '#bfe4ff');
+    box(truck, 0.9, 0.08, 0.4, -0.62, 0.46, 0, '#fff1dc');
+    [[-0.34, -0.25], [-0.34, 0.25], [0.32, -0.25], [0.32, 0.25]].forEach(([x, z]) => {
+      const wheel = cyl(truck, 0.12, 0.12, 0.09, 8, x, 0.12, z, '#2b2850'); wheel.rotation.x = Math.PI / 2;
+    });
+    for (let i = 0; i < 2; i++) {
+      const cart = new THREE.Group(); cart.position.set(RX1 - 1.5 - i * 1.1, 0.04, RUNWAY_Z + 3.9); W.add(cart);
+      box(cart, 0.62, 0.08, 0.38, 0, 0.36, 0, '#e8b23a');
+      box(cart, 0.06, 0.38, 0.06, -0.27, 0.54, 0, '#8a5a44');
+      box(cart, 0.06, 0.38, 0.06, 0.27, 0.54, 0, '#8a5a44');
+      box(cart, 0.5, 0.28, 0.3, 0, 0.52, 0, i ? '#ff9f43' : '#8f7fe6');
+      [-0.2, 0.2].forEach((x) => {
+        const wheel = cyl(cart, 0.07, 0.07, 0.06, 8, x, 0.1, 0.2, '#2b2850'); wheel.rotation.x = Math.PI / 2;
+      });
+    }
+
+    const sock = new THREE.Group(); sock.position.set(RX0 - 0.6, 0, RUNWAY_Z + 3.1); W.add(sock);
     cyl(sock, 0.03, 0.03, 1.6, 6, 0, 0.8, 0, '#8a84b8');
     const cloth = cone(sock, 0.16, 0.6, 8, 0, 1.55, 0, '#ff6b5e'); cloth.rotation.z = Math.PI / 2;
 
@@ -1322,6 +1508,13 @@ export async function createWorld(opts) {
     place();
 
     animators.push((dt, t) => {
+      if (nightAmount >= 0.5) {
+        AP.ph = 'wait'; AP.t = 0; AP.v = 0; AP.x = RX0 + 0.6; AP.yaw = 0; AP.pitch = 0; AP.bank = 0; place();
+        beaconRotor.rotation.y += dt * 0.8;
+        beaconGlow.material.opacity = 0.75 + (Math.sin(t * 6) > 0.6 ? 0.2 : 0);
+        beacon.visible = Math.sin(t * 6) > 0;
+        return;
+      }
       AP.t += dt;
       const sm = Math.min(1, dt * 5);
       switch (AP.ph) {
@@ -1402,31 +1595,63 @@ export async function createWorld(opts) {
     // station: group origin sits on the track centre line; local +z points to the island centre
     const sx = Math.cos(STATION_A) * TRACK_R, sz = Math.sin(STATION_A) * TRACK_R;
     const st = new THREE.Group(); st.position.set(sx, 0, sz); st.rotation.y = -(STATION_A + Math.PI / 2); W.add(st);
-    box(st, 8.5, 0.16, 1.5, 0, 0.08, 1.75, '#e4def7');
-    box(st, 8.5, 0.02, 0.12, 0, 0.17, 1.08, '#e8b23a').castShadow = false;
-    box(st, 3.2, 1.1, 1.5, -0.8, 0.55, 3.5, '#fff1dc');
-    box(st, 3.6, 0.1, 2.2, -0.8, 1.15, 3.3, '#4fae7a');
-    box(st, 0.5, 0.75, 0.03, -1.6, 0.4, 2.76, '#6c58cf');
-    box(st, 1.0, 0.5, 0.04, -0.2, 0.65, 2.76, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.3 });
+    box(st, 16.0, 0.18, 2.5, 0, 0.09, 1.75, '#e4def7');
+    box(st, 15.4, 0.035, 0.24, 0, 0.205, 0.62, '#e8b23a');
+    for (let i = 0; i < 62; i++) box(st, 0.12, 0.04, 0.12, -7.2 + i * 0.235, 0.21, 0.9, '#fff1dc').castShadow = false;
+    box(st, 16.0, 0.02, 0.12, 0, 0.19, 0.53, '#e8b23a').castShadow = false;
+    box(st, 5.4, 2.0, 2.2, -0.8, 1.0, 4.0, '#fff1dc');
+    box(st, 5.8, 0.16, 2.6, -0.8, 2.08, 3.8, '#4fae7a');
+    box(st, 4.7, 1.25, 0.05, -0.8, 1.05, 5.12, '#bfe4ff', { transparent: true, opacity: 0.46, depthWrite: false });
+    box(st, 0.12, 1.25, 0.06, -0.8, 1.05, 5.16, '#fff1dc');
+    box(st, 0.9, 1.15, 0.06, -2.7, 0.65, 5.16, '#6c58cf');
+    box(st, 14.0, 0.12, 3.8, 0, 2.65, 1.85, '#4b3fa6');
+    [-6.5, -3.3, 0, 3.3, 6.5].forEach((x) => cyl(st, 0.06, 0.08, 2.45, 6, x, 1.3, 1.85, '#8a84b8'));
     const nameTex = canvasTextureWH(512, 128, (g, w, h) => {
       g.fillStyle = '#241f4d'; g.fillRect(0, 0, w, h); g.fillStyle = '#ffe08a'; g.fillRect(0, h - 10, w, 10);
       g.fillStyle = '#ffffff'; g.font = '800 54px system-ui, "Segoe UI", Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('KANHWA STATION', w / 2, h / 2 - 4);
     });
-    const nameSign = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.45), new THREE.MeshBasicMaterial({ map: nameTex, fog: false }));
-    nameSign.position.set(-0.8, 1.5, 2.2); nameSign.rotation.y = Math.PI; st.add(nameSign);
+    const makeStationSign = (width, height, x, y, z) => {
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(width, height), new THREE.MeshBasicMaterial({ map: nameTex, fog: false, side: THREE.DoubleSide }));
+      sign.position.set(x, y, z); st.add(sign); return sign;
+    };
+    makeStationSign(3.2, 0.8, -0.8, 2.75, 5.34);
+    makeStationSign(2.6, 0.65, -6.0, 2.55, 1.6);
+    makeStationSign(2.6, 0.65, 6.0, 2.55, 1.6);
+    box(st, 2.6, 0.9, 0.12, 5.8, 2.0, 4.95, '#241f4d');
+    box(st, 2.28, 0.07, 0.03, 5.8, 2.27, 5.03, '#ffe08a');
+    [-0.24, 0.03, 0.30].forEach((y) => box(st, 1.55, 0.035, 0.03, 5.75, 1.93 + y, 5.03, '#bfe4ff'));
     [-2.4, 0.9, 2.5].forEach((x) => cyl(st, 0.04, 0.04, 1.2, 6, x, 0.76, 1.1, '#8a84b8'));
-    box(st, 6.0, 0.08, 1.5, 0.1, 1.38, 1.65, '#4fae7a');
-    [[1.6, 2.15], [3.0, 2.15]].forEach(([x, z]) => {
-      box(st, 0.8, 0.05, 0.3, x, 0.34, z, '#c9966f'); box(st, 0.8, 0.3, 0.04, x, 0.5, z + 0.15, '#2b2850');
+    [[-4.8, 1.4], [-2.8, 1.4], [2.8, 1.4], [4.8, 1.4]].forEach(([x, z]) => {
+      box(st, 1.0, 0.05, 0.3, x, 0.34, z, '#c9966f'); box(st, 1.0, 0.3, 0.04, x, 0.5, z + 0.15, '#2b2850');
     });
-    box(st, 0.5, 0.25, 0.04, 2.3, 1.22, 1.1, '#241f4d').castShadow = false;
+    // Platform clock and a pedestrian footbridge crossing the railway.
+    cyl(st, 0.35, 0.35, 0.08, 16, 2.4, 2.25, 4.95, '#fff1dc').rotation.x = Math.PI / 2;
+    box(st, 0.08, 0.52, 0.05, 2.4, 2.25, 5.0, '#241f4d');
+    box(st, 0.42, 0.06, 0.05, 2.5, 2.4, 5.0, '#241f4d');
+    box(st, 0.8, 0.14, 7.8, -7.2, 3.2, -0.1, '#c9c2ea');
+    box(st, 0.08, 0.72, 7.8, -7.2, 3.63, -0.1, '#8a84b8');
+    [-7.65, -6.75].forEach((x) => box(st, 0.05, 0.7, 7.8, x, 3.6, -0.1, '#8a84b8'));
+    box(st, 1.1, 0.12, 2.8, -7.2, 1.55, 4.0, '#c9c2ea').rotation.x = -0.52;
+    box(st, 1.1, 0.12, 2.8, -7.2, 1.55, -4.2, '#c9c2ea').rotation.x = 0.52;
+    const signalPost = cyl(st, 0.035, 0.04, 1.55, 6, 8.2, 0.78, -0.4, '#2b2850');
+    ball(st, 0.1, 8.2, 1.48, -0.4, '#ff4d4d', { emissive: '#ff2d2d', emissiveIntensity: 1 });
+    ball(st, 0.1, 8.2, 1.2, -0.4, '#5dff9a', { emissive: '#2dff7a', emissiveIntensity: 1 });
+    const signalGlow = glow(st, 0xff4d4d, 0.8, 0.08, 8.2, 1.48, -0.4);
+    nightGlows.push({ material: signalGlow.material, dayOpacity: 0.03, nightOpacity: 0.95 });
     const stGlow = glow(st, 0xffd36e, 1.0, 0.5, 0.1, 1.25, 1.5);
 
     // a passenger waits on the platform and watches the track
     const px = sx * (TRACK_R - 1.75) / TRACK_R, pz = sz * (TRACK_R - 1.75) / TRACK_R;
     const tgx = -Math.sin(STATION_A), tgz = Math.cos(STATION_A);
-    const passenger = makePerson({ shirt: '#e8b23a', pants: '#2b2850', hair: '#7a4a32', skin: '#f6d2b4', hairStyle: 'pony', shoes: '#8a5a44' });
-    makeAgent(passenger, W, { x: px + tgx * 1.5, z: pz + tgz * 1.5, face: [Math.cos(STATION_A), Math.sin(STATION_A)], ground: () => 0.16, steps: [{ wait: Infinity, pose: 'idle' }] });
+    const passengers = [
+      { x: px + tgx * 2.2, z: pz + tgz * 2.2, shirt: '#e8b23a' },
+      { x: px - tgx * 2.4, z: pz - tgz * 2.4, shirt: '#5ac8c8' },
+      { x: px + tgx * 4.5, z: pz + tgz * 4.5, shirt: '#ff6b5e' },
+    ];
+    passengers.forEach((p, i) => {
+      const passenger = makePerson({ shirt: p.shirt, pants: '#2b2850', hair: i % 2 ? '#241f4d' : '#7a4a32', skin: '#f6d2b4', hairStyle: i % 2 ? 'short' : 'pony', shoes: '#8a5a44' });
+      makeAgent(passenger, W, { x: p.x, z: p.z, face: [Math.cos(STATION_A), Math.sin(STATION_A)], ground: () => 0.16, shift: 'day', steps: [{ wait: Infinity, pose: 'idle' }] });
+    });
 
     // the train: four carriages that follow the ring and stop at the station
     const GAP = 1.78 / TRACK_R, cars = [];
@@ -1442,6 +1667,16 @@ export async function createWorld(opts) {
     carriage('#ff6b5e', true); carriage('#5ac8c8'); carriage('#8f7fe6'); carriage('#e8b23a');
     const TR = { th: STATION_A - 0.5, dwell: 0, passed: false };
     animators.push((dt, t) => {
+      if (nightAmount >= 0.5) {
+        TR.th = STATION_A + GAP * 1.5; TR.dwell = 4.5; TR.passed = true;
+        cars.forEach((c, i) => {
+          const a = TR.th - i * GAP;
+          c.position.set(Math.cos(a) * TRACK_R, 0.06, Math.sin(a) * TRACK_R);
+          c.rotation.y = -(a + Math.PI / 2);
+        });
+        stGlow.material.opacity = 0.9;
+        return;
+      }
       const mid = TR.th - GAP * 1.5;                                    // middle of the train
       const dAng = Math.atan2(Math.sin(mid - STATION_A), Math.cos(mid - STATION_A));
       let sp = 3.4 / TRACK_R;
@@ -1458,14 +1693,14 @@ export async function createWorld(opts) {
         c.position.set(Math.cos(a) * TRACK_R, 0.06, Math.sin(a) * TRACK_R);
         c.rotation.y = -(a + Math.PI / 2);
       });
-      stGlow.material.opacity = 0.45 + Math.sin(t * 2) * 0.08;
+      stGlow.material.opacity = nightAmount >= 0.5 ? 0.9 : 0.12 + Math.sin(t * 2) * 0.04;
     });
   });
 /* ---------------------------------------------------------------- */
   /* 7. project office buildings (smaller, with glass cabins inside)   */
   /* ---------------------------------------------------------------- */
   const HQ = { x: -6.0, z: 18.0 };
-  const HQ2 = { x: -15.5, z: 7.5 };
+  const HQ2 = { x: -15.5, z: 9.0 };
   const HQ3 = { x: 24.0, z: -4.0 };
   const FLOOR = 0.14;
   const companyCfg = (id) => ((config.companies || {})[id]) || {};
@@ -1473,7 +1708,23 @@ export async function createWorld(opts) {
   function buildOfficeHQ(o) {
     const H = new THREE.Group(); H.position.set(o.x, 0, o.z); H.scale.setScalar(OFFICE_SCALE); W.add(H);
     const gate = { pos: 0, target: 0 };
+    const visitOccluders = [];
     const myMonitors = [];                              // only THIS office's screens
+    const windowMaterials = [];
+    const cabinGlows = [];
+    const officeLights = [];
+    [[-3.1, 2.0], [-0.7, -0.6], [2.0, -0.6]].forEach(([x, z]) => {
+      const light = new THREE.PointLight('#fff8ed', 0, 8.5, 1.4);
+      light.position.set(x, 2.15, z);
+      H.add(light);
+      officeLights.push(light);
+    });
+    const founderDoor = new THREE.Group();
+    founderDoor.position.set(-1.6, 0, 2.45);
+    H.add(founderDoor);
+    box(founderDoor, 0.04, 0.98, 0.9, 0, 0.55, -0.45, '#bfe4ff', { transparent: true, opacity: 0.35, depthWrite: false });
+    box(founderDoor, 0.07, 0.06, 0.06, -0.05, 0.58, -0.78, o.accent);
+    let founderDoorAngle = 0;
     const bx = (sx, sy, sz, x, y, z, c, opt) => box(H, sx, sy, sz, x, y, z, c, opt);
     const glass = (sx, sy, sz, x, y, z) => { const m = bx(sx, sy, sz, x, y, z, '#bfe4ff', { transparent: true, opacity: 0.2, depthWrite: false }); m.castShadow = false; return m; };
 
@@ -1519,20 +1770,20 @@ export async function createWorld(opts) {
 
     bx(7.4, 0.9, 3.5, 0, 1.9, -1.25, o.wallTint);
     bx(7.5, 0.06, 3.6, 0, 2.37, -1.25, o.accent);
-    [-2.7, -1.35, 0, 1.35, 2.7].forEach((x) => bx(0.9, 0.5, 0.03, x, 1.9, 0.52, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.45 }));
+    [-2.7, -1.35, 0, 1.35, 2.7].forEach((x) => windowMaterials.push(bx(0.9, 0.5, 0.03, x, 1.9, 0.52, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.08 }).material));
     [-2.2, -0.9].forEach((z) => { bx(0.03, 0.5, 0.9, -3.71, 1.9, z, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.45 }); bx(0.03, 0.5, 0.9, 3.71, 1.9, z, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.45 }); });
     bx(6.0, 0.8, 3.1, 0, 2.78, -1.45, '#2b2850');
     const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 0.534), signMat); sign.position.set(0, 2.78, 0.14); H.add(sign);
     bx(6.2, 0.1, 3.3, 0, 3.22, -1.45, '#3a2f5b');
-    bx(2.6, 2.0, 2.4, 0, 4.27, -1.7, o.tower);
-    [3.7, 4.3, 4.9].forEach((y) => [-0.85, 0, 0.85].forEach((x) => bx(0.4, 0.34, 0.03, x, y, -0.48, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.7 })));
-    bx(2.8, 0.12, 2.6, 0, 5.33, -1.7, '#241f4d');
-    cyl(H, 0.04, 0.05, 1.0, 6, 0, 5.9, -1.7, '#d8d2ff');
-    const orb = ball(H, 0.2, 0, 6.5, -1.7, o.accent, { emissive: o.accent, emissiveIntensity: 1 }); orb.castShadow = false;
-    const orbGlow = glow(H, new THREE.Color(o.accent), 3.4, 0.7, 0, 6.5, -1.7);        // brand colour, not always pink
+    bx(2.9, 3.2, 2.7, 0, 4.95, -1.7, o.tower);
+    [4.0, 4.75, 5.5, 6.25].forEach((y) => [-0.85, 0, 0.85].forEach((x) => bx(0.4, 0.38, 0.03, x, y, -0.3, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.7 })));
+    bx(3.1, 0.16, 2.9, 0, 6.63, -1.7, '#241f4d');
+    cyl(H, 0.04, 0.05, 0.8, 6, 0, 7.1, -1.7, '#d8d2ff');
+    const orb = ball(H, 0.2, 0, 7.75, -1.7, o.accent, { emissive: o.accent, emissiveIntensity: 1 }); orb.castShadow = false;
+    const orbGlow = glow(H, new THREE.Color(o.accent), 3.4, 0.7, 0, 7.75, -1.7);        // brand colour, not always pink
     const pulses = [0, 1].map((i) => {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: ringTex, color: new THREE.Color(o.accentLight), transparent: true, depthWrite: false, fog: false }));
-      s.position.set(0, 6.5, -1.7); H.add(s); return { s, off: i / 2 };
+      s.position.set(0, 7.75, -1.7); H.add(s); return { s, off: i / 2 };
     });
 
     [[-2.6, o.accent], [-1.4, o.accent2], [-0.2, '#ffe08a']].forEach(([x, c]) => bx(0.55, 0.38, 0.02, x, 1.0, -2.93, c, { emissive: c, emissiveIntensity: 0.25 }));
@@ -1563,20 +1814,25 @@ export async function createWorld(opts) {
         bx(0.05, 0.05, 1.3, x, 1.0, -1.6, o.accent).castShadow = false;
         bx(0.05, 0.85, 0.05, x, 0.57, -0.95, o.accent2).castShadow = false;
         bx(0.05, 0.85, 0.05, x, 0.57, -2.25, o.accent2).castShadow = false;
+        cabinGlows.push(glow(H, o.accentLight, 0.62, 0.02, x, 1.05, -1.6));
       });
     });
     DESK_X.forEach((x, i) => {            // cabin number plates
       bx(0.34, 0.1, 0.03, x - 0.2, 0.96, -0.93, '#ffffff', { emissive: o.accent, emissiveIntensity: 0.25 }).castShadow = false;
     });
 
-    [-1.05, 1.05].forEach((x) => bx(0.2, 1.0, 0.2, x, 0.52, 3.2, '#fff1dc'));
-    bx(2.3, 0.1, 0.12, 0, 1.05, 3.2, '#3a2f5b');
-    const gateSign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.275), signMat); gateSign.position.set(0, 1.28, 3.28); H.add(gateSign);
-    const gateSign2 = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.275), signMat); gateSign2.position.set(0, 1.28, 3.12); gateSign2.rotation.y = Math.PI; H.add(gateSign2);
+    [-0.9, 0.9].forEach((x) => {
+      bx(0.2, 1.25, 0.2, x, 0.64, 3.2, '#fff1dc');
+      bx(0.28, 0.1, 0.28, x, 1.28, 3.2, o.accent);
+    });
+    bx(2.0, 0.12, 0.16, 0, 1.38, 3.2, '#3a2f5b');
+    const gateSign = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.32), signMat); gateSign.position.set(0, 1.12, 3.33); H.add(gateSign);
+    const gateSign2 = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.32), signMat); gateSign2.position.set(0, 1.12, 3.07); gateSign2.rotation.y = Math.PI; H.add(gateSign2);
+    visitOccluders.push(gateSign, gateSign2);
     const makePanel = () => {
       const p = new THREE.Group(); H.add(p);
-      box(p, 0.95, 0.5, 0.05, 0, 0.32, 0, '#3a2f5b');
-      for (let k = -2; k <= 2; k++) box(p, 0.05, 0.5, 0.07, k * 0.19, 0.32, 0, o.accent);
+      box(p, 0.96, 0.54, 0.05, 0, 0.3, 0, '#3a2f5b');
+      for (let k = -2; k <= 2; k++) box(p, 0.05, 0.54, 0.06, k * 0.19, 0.3, 0, o.accent);
       return p;
     };
     const gateL = makePanel(), gateR = makePanel();
@@ -1613,10 +1869,10 @@ export async function createWorld(opts) {
         });
       });
       const BX = -3.4, BZ = 3.75;
-      [-0.85, 0.85].forEach((dx) => bx(0.07, 1.0, 0.07, BX + dx, 0.5, BZ, '#8a5a44'));
-      bx(1.98, 1.34, 0.05, BX, 1.2, BZ - 0.04, '#2b2850');
+      [-0.85, 0.85].forEach((dx) => visitOccluders.push(bx(0.07, 1.0, 0.07, BX + dx, 0.5, BZ, '#8a5a44')));
+      visitOccluders.push(bx(1.98, 1.34, 0.05, BX, 1.2, BZ - 0.04, '#2b2850'));
       const board = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 1.267), new THREE.MeshBasicMaterial({ map: btex, fog: false }));
-      board.position.set(BX, 1.2, BZ - 0.01); H.add(board);
+      board.position.set(BX, 1.2, BZ - 0.01); H.add(board); visitOccluders.push(board);
     }
 
     animators.push((dt, t) => {
@@ -1624,21 +1880,32 @@ export async function createWorld(opts) {
       gate.pos += (gateWant - gate.pos) * Math.min(1, dt * 2.2);
       doorPos += ((gate.hold ? 1 : 0) - doorPos) * Math.min(1, dt * 2.6);
       mainDoor.position.x = doorPos * 0.95; mainDoor.material.opacity = 0.35 * (1 - doorPos * 0.5);
-      gateL.position.set(-0.5 - 0.95 * gate.pos, 0, 3.32); gateR.position.set(0.5 + 0.95 * gate.pos, 0, 3.32);
+      const ownerConversation = visit.active && visit.id === o.id && visit.ownerChat;
+      founderDoor.visible = !ownerConversation;
+      const founderDoorTarget = visit.active && visit.id === o.id && visit.atOwner ? Math.PI / 2 : 0;
+      founderDoorAngle += (founderDoorTarget - founderDoorAngle) * Math.min(1, dt * 2.6);
+      founderDoor.rotation.y = founderDoorAngle;
+      gateL.position.set(-0.6 - 1.25 * gate.pos, 0, 3.32); gateR.position.set(0.6 + 1.25 * gate.pos, 0, 3.32);
       const open = gateWant > 0.5;
       lampRed.visible = !open; lampGreen.visible = open;
       lampGlow.material.color.set(open ? 0x5dff9a : 0xff4d4d);
       myMonitors.forEach((m, i) => { m.emissiveIntensity = 0.7 + Math.sin(t * 5 + i * 2) * 0.1 + (Math.sin(t * 17 + i) > 0.92 ? 0.25 : 0); });
+      windowMaterials.forEach((m) => { m.emissiveIntensity = 0.08 + nightAmount * 1.2; });
+      cabinGlows.forEach((g) => { g.material.opacity = 0.02 + nightAmount * 0.78; });
+      officeLights.forEach((light) => { light.intensity = nightAmount * 6; });
       orbGlow.material.opacity = 0.55 + Math.sin(t * 3) * 0.2;
+      orb.material.emissiveIntensity = 0.25 + nightAmount * 1.2;
+      const windowIntensity = 0.35 + nightAmount * 0.8;
       pulses.forEach((p) => { const k = (t * 0.55 + p.off) % 1; p.s.scale.setScalar(0.6 + k * 3.4); p.s.material.opacity = (1 - k) * 0.8; });
     });
 
     // the ROOF group: everything above the ground floor. It lifts off while the office is visited.
     const roof = new THREE.Group(); H.add(roof);
     H.children.slice().forEach((c) => { if (c !== roof && (c.isMesh || c.isSprite) && c.position.y >= 1.3) roof.add(c); });
+    cabinGlows.forEach((g) => roof.add(g));
 
     // ---- the FOUNDER'S OFFICE: a glass room in the front-left of the courtyard (Murari's own office)
-    const fglass = (sx, sy, sz, x, z) => { const m = bx(sx, sy, sz, x, 0.58, z, '#bfe4ff', { transparent: true, opacity: 0.28, depthWrite: false }); m.castShadow = false; return m; };
+    const fglass = (sx, sy, sz, x, z) => { const m = bx(sx, sy, sz, x, 0.58, z, '#bfe4ff', { transparent: true, opacity: 0.58, depthWrite: false }); m.castShadow = false; return m; };
     bx(3.0, 0.03, 2.05, -3.1, 0.05, 2.0, '#f3ecff').castShadow = false;
     fglass(0.04, 1.0, 2.05, -4.6, 2.0); fglass(3.0, 1.0, 0.04, -3.1, 0.98); fglass(3.0, 1.0, 0.04, -3.1, 3.02);
     fglass(0.04, 1.0, 0.55, -1.6, 1.27); fglass(0.04, 1.0, 0.55, -1.6, 2.73);
@@ -1651,11 +1918,12 @@ export async function createWorld(opts) {
       g.fillStyle = o.accentLight; g.font = '700 38px system-ui, "Segoe UI", Arial, sans-serif'; g.fillText('Murari Kumar', 30, 108);
     });
     const founderSign = new THREE.Mesh(new THREE.PlaneGeometry(1.45, 0.283), new THREE.MeshBasicMaterial({ map: founderTex, side: THREE.DoubleSide, fog: false }));
-    founderSign.position.set(-1.57, 1.3, 2.0); founderSign.rotation.y = Math.PI / 2; H.add(founderSign);
+    founderSign.position.set(-1.57, 1.3, 2.0); founderSign.rotation.y = Math.PI / 2; H.add(founderSign); visitOccluders.push(founderSign);
     bx(0.5, 0.05, 1.5, -4.35, 0.4, 2.0, '#a9714f');                                        // desk against the west wall
     [[-4.55, 1.3], [-4.55, 2.7], [-4.15, 1.3], [-4.15, 2.7]].forEach(([x, z]) => bx(0.04, 0.36, 0.04, x, 0.2, z, '#8a84b8'));
     bx(0.04, 0.3, 0.55, -4.45, 0.62, 2.0, '#241f4d'); bx(0.012, 0.24, 0.46, -4.42, 0.63, 2.0, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.7 });
-    bx(0.3, 0.05, 0.3, -4.1, 0.28, 2.75, '#2b2850'); bx(0.05, 0.3, 0.3, -4.0, 0.42, 2.75, '#2b2850');          // spare chair
+    bx(0.5, 0.05, 0.5, -3.88, 0.26, 2.0, '#2b2850');
+    bx(0.08, 0.55, 0.5, -4.04, 0.52, 2.0, '#2b2850');
     bx(1.1, 0.5, 0.18, -3.0, 0.32, 1.1, '#c9966f');                                                          // bookshelf on the north wall
     [-3.35, -3.15, -2.95, -2.75, -2.6].forEach((x, k) => bx(0.12, 0.2, 0.1, x, 0.5, 1.1, ['#ff6b5e', '#ffe08a', '#8f7fe6', '#4fae7a', o.accent][k]));
     ball(H, 0.22, -4.3, 0.35, 0.28 + 0.98, '#3fae7a'); bx(0.3, 0.2, 0.3, -4.3, 0.15, 1.26, '#a9714f');
@@ -1663,8 +1931,9 @@ export async function createWorld(opts) {
 
 
     const cabinCeiling = bx(3.2, 0.05, 2.2, -3.1, 1.2, 2.0, '#fff8ec'); roof.add(cabinCeiling);
-    const cabinGlow = glow(H, 0xfff3b0, 1.6, 0.35, -3.1, 1.05, 2.0); roof.add(cabinGlow);
-    return { H, gate, roof, accent: o.accent, id: o.id, team: [] };
+    const cabinGlow = glow(H, 0xfff3b0, 1.6, 0.08, -3.1, 1.05, 2.0); roof.add(cabinGlow);
+    nightGlows.push({ material: cabinGlow.material, dayOpacity: 0.08, nightOpacity: 0.9 });
+    return { H, gate, roof, visitOccluders, accent: o.accent, id: o.id, team: [] };
   }
 
   const offices = {};
@@ -1708,10 +1977,64 @@ export async function createWorld(opts) {
     aboutAgent = makeAgent(me, W, { x: -4.5, z: 7.4, heading: -Math.PI / 3, ground: () => 0, steps: [{ wait: Infinity, pose: 'talk' }] });
 
     const v1 = houseV1.value, mailStand = [9.7, 7.0];
+    const homeLook = { shirt: '#ff6b5e', pants: '#2b2850', hair: '#241f4d', backpack: '#e8b23a', skin: '#e9b48d', shoes: '#fff8ec' };
+    const homeStart = v1.frontPt;
+    homeResident = makeAgent(makePerson(homeLook), W, {
+      x: homeStart[0], z: homeStart[1], ground: cityGround, hidden: true,
+      steps: [{ wait: Infinity, pose: 'talk', face: [0, 1] }],
+    });
+    const roadStart = roadSamples[Math.floor(roadSamples.length / 2)];
+    playerAgent = makeAgent(makePerson({ ...homeLook, shirt: '#4fd1e0', backpack: '#8f7fe6' }), W, {
+      x: roadStart.x, z: roadStart.z, ground: walkGround, speed: 2.0, hidden: true,
+      steps: [{ wait: Infinity, pose: 'idle' }],
+      tick: (agent) => {
+        if (!playerGoal || Math.hypot(agent.x - playerGoal.x, agent.z - playerGoal.z) > 0.7) return;
+        const arrived = playerGoal.id;
+        playerGoal = null;
+        if (arrived !== 'manual') onWalkArrive(arrived);
+      },
+    });
+    playerAgent.p.group.scale.setScalar(2.15);
+    const playerHalo = new THREE.Mesh(
+      new THREE.RingGeometry(0.38, 0.48, 28),
+      new THREE.MeshBasicMaterial({ color: '#4fd1e0', transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    playerHalo.rotation.x = -Math.PI / 2;
+    playerHalo.position.y = 0.025;
+    playerAgent.p.group.add(playerHalo);
+
+    const officeResident = makeAgent(makePerson(homeLook), astropulseHQ.H, {
+      x: -4.3, z: 2.0, ground: hqGround, hidden: true,
+      steps: [{ wait: Infinity, pose: 'talk', face: [1, 0] }],
+    });
+    const schedule = config.schedule || {};
+    let lastScheduleMinute = -1;
+    const scheduleClock = new Intl.DateTimeFormat('en-US', {
+      timeZone: schedule.timeZone || 'Asia/Kolkata',
+      hour: 'numeric',
+      hourCycle: 'h23',
+    });
+    always.push(() => {
+      const now = new Date();
+      const minuteKey = Math.floor(now.getTime() / 60_000);
+      if (minuteKey === lastScheduleMinute) return;
+      const parts = scheduleClock.formatToParts(now);
+      const hour = Number(parts.find((part) => part.type === 'hour')?.value);
+      lastScheduleMinute = minuteKey;
+      const officeStart = schedule.officeStart ?? 12;
+      const officeEnd = schedule.officeEnd ?? 24;
+      const homeStartHour = schedule.homeStart ?? 10;
+      const atOffice = hour >= officeStart && hour < officeEnd;
+      const atHome = hour >= homeStartHour && hour < officeStart;
+      homeScheduledVisible = atHome;
+      homeResident.hidden = !homeScheduledVisible && !homeVisitActive;
+      officeResident.hidden = !atOffice;
+    });
+
     const outward = [v1.frontPt, ...roadPath(v1.frontPt[0], v1.frontPt[1], 8.6, 7.4, 0.35, 3), mailStand];
     const villager = makePerson({ shirt: '#8f7fe6', pants: '#3a3568', hair: '#7a4a32', backpack: '#ff6b5e', skin: '#f6d2b4', hairStyle: 'pony', shoes: '#8a5a44' });
     makeAgent(villager, W, {
-      x: v1.frontPt[0], z: v1.frontPt[1], ground: walkGround, speed: 1.0,
+      x: v1.frontPt[0], z: v1.frontPt[1], ground: walkGround, speed: 1.0, shift: 'day', nightHome: v1.doorPt,
       steps: [
         { do: (a) => { a.hidden = false; a.x = v1.doorPt[0]; a.z = v1.doorPt[1]; v1.door.target = 1; } },
         { wait: 0.9, pose: 'idle' },
@@ -1731,7 +2054,7 @@ export async function createWorld(opts) {
     const hoe = new THREE.Group(); farmer.elbowR.add(hoe); hoe.rotation.z = -0.3;
     cyl(hoe, 0.015, 0.015, 0.8, 5, 0.04, -0.34, 0, '#8a5a44'); box(hoe, 0.05, 0.05, 0.2, 0.04, -0.74, 0, '#9a9ab8');
     makeAgent(farmer, W, {
-      x: 8.1, z: 2.4, ground: () => 0, speed: 0.8,
+      x: 8.1, z: 2.4, ground: () => 0, speed: 0.8, shift: 'day', nightHome: houseV1.value.doorPt,
       steps: [
         { go: [9.5, 2.65] }, { wait: 6, pose: 'farm', face: [0, -1] },
         { go: [11.0, 2.65] }, { wait: 6, pose: 'farm', face: [0, -1] },
@@ -1746,12 +2069,12 @@ export async function createWorld(opts) {
     const rod = cyl(fisher.group, 0.012, 0.02, 1.6, 6, 0.65, 0.95, 0.05, '#8a5a44'); rod.rotation.z = -1.0; rod.castShadow = false;
     cyl(fisher.group, 0.004, 0.004, 0.95, 4, 1.38, 0.6, 0.05, '#ffffff').castShadow = false;
     const bobber = ball(fisher.group, 0.035, 1.38, 0.62, 0.05, '#ff6b5e'); bobber.castShadow = false;
-    makeAgent(fisher, W, { x: -3.35, z: 0.5, face: [-1, -0.05], ground: terrainH, steps: [{ wait: Infinity, pose: 'fish' }] });
+    makeAgent(fisher, W, { x: -3.35, z: 0.5, face: [-1, -0.05], ground: terrainH, shift: 'day', nightHome: [-9.6, -1.2], steps: [{ wait: Infinity, pose: 'fish' }] });
     animators.push((dt, t) => { bobber.position.y = 0.62 + Math.sin(t * 2.2) * 0.012; rod.rotation.z = -1.0 + Math.sin(t * 0.7) * 0.02; });
 
     const student = makePerson({ shirt: '#ffe08a', pants: '#4b3fa6', hair: '#241f4d', hairStyle: 'pony', backpack: '#5ac8c8', skin: '#e9b48d', shorts: true, shoes: '#ff6b5e' });
     student.group.scale.setScalar(0.9);
-    makeAgent(student, W, { x: -8.3, z: -2.6, face: [0.5, 1], ground: terrainH, steps: [{ wait: Infinity, pose: 'wave' }] });
+    makeAgent(student, W, { x: -8.3, z: -2.6, face: [0.5, 1], ground: terrainH, shift: 'day', nightHome: houseV1.value.doorPt, steps: [{ wait: Infinity, pose: 'wave' }] });
 
     /* --- the cyclist: rides, FALLS DOWN, gets up, dusts off, rides on --- */
     const bikeRoot = new THREE.Group(), tilt = new THREE.Group(); W.add(bikeRoot); bikeRoot.add(tilt);
@@ -1774,6 +2097,7 @@ export async function createWorld(opts) {
       p.legL.rotation.z = v('ll'); p.legR.rotation.z = v('lr'); p.shinL.rotation.z = v('sl'); p.shinR.rotation.z = v('sr');
     };
     animators.push((dt, t) => {
+      if (nightAmount >= 0.5) return;
       const moving = ride.phase === 'ride' || ride.phase === 'fall';
       if (moving) {
         ride.d += ride.dir * (ride.phase === 'ride' ? 1.7 : ride.v) * dt;
@@ -1839,35 +2163,6 @@ export async function createWorld(opts) {
     });
     bikeRoot.position.set(-12, 0.05, 3);
 
-    const c1 = houseC1.value, c2 = houseC2.value;
-    const res1 = makePerson({ shirt: '#ff9f43', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', shoes: '#fff8ec' });
-    makeAgent(res1, W, {
-      x: c1.frontPt[0], z: c1.frontPt[1], ground: cityGround, speed: 1.0,
-      steps: [
-        { do: (a) => { a.hidden = false; a.x = c1.doorPt[0]; a.z = c1.doorPt[1]; c1.door.target = 1; } },
-        { wait: 0.9 }, { go: c1.frontPt }, { do: () => { c1.door.target = 0; } },
-        { go: [1.5, AVENUE_Z - 1.05] }, { go: [9.0, AVENUE_Z - 1.05] },
-        { wait: 3, pose: 'wave', face: [0, -1] },
-        { go: [1.5, AVENUE_Z - 1.05] }, { go: c1.frontPt },
-        { do: () => { c1.door.target = 1; } }, { wait: 0.8 }, { go: c1.doorPt },
-        { do: (a) => { a.hidden = true; c1.door.target = 0; } }, { wait: 5 },
-      ],
-    });
-    const res2 = makePerson({ shirt: '#c9a7ff', pants: '#3a3568', hair: '#8a5a44', skin: '#f2c7a5', hairStyle: 'long', shoes: '#2b2850' });
-    makeAgent(res2, W, {
-      x: c2.frontPt[0], z: c2.frontPt[1], ground: cityGround, speed: 1.0,
-      steps: [
-        { wait: 5, pose: 'idle' },
-        { do: (a) => { a.hidden = false; a.x = c2.doorPt[0]; a.z = c2.doorPt[1]; c2.door.target = 1; } },
-        { wait: 0.9 }, { go: c2.frontPt }, { do: () => { c2.door.target = 0; } },
-        { go: [4.2, AVENUE_Z - 1.05] }, { go: [4.2, AVENUE_Z + 1.05] }, { go: [4.2, 24.5] },
-        { wait: 8, pose: 'sit', face: [0, -1] },
-        { go: [4.2, AVENUE_Z + 1.05] }, { go: [4.2, AVENUE_Z - 1.05] }, { go: c2.frontPt },
-        { do: () => { c2.door.target = 1; } }, { wait: 0.8 }, { go: c2.doorPt },
-        { do: (a) => { a.hidden = true; c2.door.target = 0; } }, { wait: 4 },
-      ],
-    });
-
     /* --- shared helpers for the three offices --- */
     const seatedSteps = (pose) => [{ wait: Infinity, pose, face: [-1, 0] }];
     const addHeadset = (p) => {
@@ -1877,18 +2172,18 @@ export async function createWorld(opts) {
       cyl(hs, 0.008, 0.008, 0.18, 4, 0.08, -0.05, 0.1, '#2b2850').rotation.z = 1.3;
       ball(hs, 0.018, 0.14, -0.065, 0.06, '#ff4fa3').castShadow = false;
     };
-    const deskWorker = (grp, i, pose, look) => { const p = makePerson(look); makeAgent(p, grp, { x: DESK_X0(i), z: -1.55, face: [-1, 0], ground: hqGround, steps: seatedSteps(pose) }); return p; };
-    const presenter = (grp, look) => makeAgent(makePerson(look), grp, { x: 3.0, z: -2.25, face: [0, 1], ground: hqGround, steps: [{ wait: Infinity, pose: 'talk' }] });
+    const deskWorker = (grp, i, pose, look) => { const p = makePerson(look); makeAgent(p, grp, { x: DESK_X0(i), z: -1.55, face: [-1, 0], ground: hqGround, shift: 'day', steps: seatedSteps(pose) }); return p; };
+    const presenter = (grp, look) => makeAgent(makePerson(look), grp, { x: 3.0, z: -2.25, face: [0, 1], ground: hqGround, shift: 'day', steps: [{ wait: Infinity, pose: 'talk' }] });
     const inspector = (grp, look, deskIdx) => {
       const p = makePerson(look);
       box(p.elbowL, 0.03, 0.22, 0.16, 0.05, -0.17, 0, '#c9966f');
       const st = [];
       deskIdx.forEach((i) => { const sx = DESK_X0(i) - 0.75; st.push({ go: [sx, 0.05] }, { go: [sx, -0.7] }, { wait: 2.4, pose: 'point', face: [0, -1] }, { go: [sx, 0.05] }); });
       st.push({ go: [-3.2, 0.05] });
-      makeAgent(p, grp, { x: -3.2, z: 0.05, ground: hqGround, speed: 0.8, steps: st });
+      makeAgent(p, grp, { x: -3.2, z: 0.05, ground: hqGround, speed: 0.8, shift: 'day', steps: st });
     };
     const gateGuard = (grp, hq, look) => makeAgent(makePerson(look), grp, {
-      x: 1.55, z: 2.15, face: [0, 1], ground: hqGround,
+      x: 1.55, z: 2.15, face: [0, 1], ground: hqGround, shift: 'day',
       steps: [{ wait: 6, pose: 'idle', face: [0, 1] }, { go: [1.55, 1.5] }, { wait: 4, face: [0, 1] }, { go: [1.55, 2.15] }],
       tick: (a) => { if (hq.gate.target > 0.5 && hq.gate.pos < 0.98) { a.pose = 'wave'; a.want = -Math.atan2(1, 0.3); } },
     });
@@ -1897,7 +2192,7 @@ export async function createWorld(opts) {
       const parcel = box(c.upper, 0.2, 0.16, 0.26, 0.3, 0.2, 0, parcelColor);
       const parcelDoor = box(grp, 0.3, 0.22, 0.3, 0.9, 0.12, 1.05, parcelColor); parcelDoor.visible = false;
       makeAgent(c, grp, {
-        x: -4.9, z: 3.55, face: [1, 0], ground: hqGround, speed: 1.0,
+        x: -4.9, z: 3.55, face: [1, 0], ground: hqGround, speed: 1.0, shift: 'day',
         steps: [
           { do: (a) => { a.hidden = false; a.x = -4.9; a.z = 3.55; a.carry = true; parcel.visible = true; parcelDoor.visible = false; } },
           { go: [0, 3.55] },
@@ -1911,6 +2206,30 @@ export async function createWorld(opts) {
           { go: [5.2, 3.55] },
           { do: (a) => { a.hidden = true; } }, { wait: 7 },
         ],
+      });
+    };
+    const addNightCrew = (grp, accent) => {
+      const common = { shirt: '#263452', pants: '#171d36', hair: '#241f4d', skin: '#d9a07a', shoes: '#241f4d', longSleeve: true };
+      const nightWorker = (x, pose, shirt) => makeAgent(makePerson({ ...common, shirt }), grp, {
+        x, z: -1.55, face: [-1, 0], ground: hqGround, hidden: true, shift: 'night',
+        steps: [{ wait: Infinity, pose }],
+      });
+      nightWorker(-1.1, 'type', accent);
+      nightWorker(0.4, 'phone', '#5ac8c8');
+      const guard = makePerson({ ...common, shirt: '#1c2540', hat: 'beanie', hatColor: '#241f4d', belt: accent });
+      ball(guard.elbowR, 0.05, 0.06, -0.13, 0, '#ffe08a', { emissive: '#ffe08a', emissiveIntensity: 1 }).castShadow = false;
+      const torchGlow = glow(guard.group, '#ffe08a', 0.65, 0.04, 0.3, 1.0, 2.0);
+      nightGlows.push({ material: torchGlow.material, dayOpacity: 0.02, nightOpacity: 0.8 });
+      makeAgent(guard, grp, {
+        x: 0, z: 3.65, face: [0, 1], ground: hqGround, hidden: true, shift: 'night',
+        steps: [{ wait: 5, pose: 'idle', face: [0, 1] }, { go: [-1.4, 2.7] }, { wait: 4, face: [-1, 0] }, { go: [0, 3.65] }],
+      });
+      const cleaner = makePerson({ ...common, shirt: '#4b3fa6', hat: 'cap', hatColor: '#4fd1e0' });
+      const brush = cyl(cleaner.elbowR, 0.018, 0.018, 0.65, 5, 0.05, -0.34, 0, '#8a5a44');
+      brush.rotation.z = -0.9;
+      makeAgent(cleaner, grp, {
+        x: 2.8, z: 1.5, face: [-1, 0], ground: hqGround, speed: 0.55, hidden: true, shift: 'night',
+        steps: [{ go: [-2.8, 1.5] }, { wait: 1.5, pose: 'idle' }, { go: [-2.8, -0.4] }, { go: [2.8, -0.4] }, { go: [2.8, 1.5] }],
       });
     };
     const insp = { shirt: '#fff8ec', pants: '#2b2850', hair: '#241f4d', skin: '#e9b48d', hairStyle: 'short', longSleeve: true, shoes: '#2b2850' };
@@ -1932,7 +2251,7 @@ export async function createWorld(opts) {
     const gardener = makePerson({ shirt: '#4fae7a', pants: '#6a5a45', hair: '#241f4d', skin: '#d9a07a', hat: 'straw', shoes: '#8a5a44' });
     cyl(gardener.elbowR, 0.07, 0.07, 0.12, 10, 0.06, -0.2, 0, '#5ac8c8'); cyl(gardener.elbowR, 0.012, 0.02, 0.2, 6, 0.17, -0.16, 0, '#5ac8c8').rotation.z = -1.0;
     makeAgent(gardener, H, {
-      x: 1.6, z: 2.4, face: [-1, 0], ground: hqGround, speed: 0.8,
+      x: 1.6, z: 2.4, face: [-1, 0], ground: hqGround, speed: 0.8, shift: 'day',
       steps: [
         { go: [1.6, 1.3] }, { wait: 4, pose: 'water', face: [-1, 0] },
         { go: [1.6, 2.0] }, { wait: 4, pose: 'water', face: [-1, 0] },
@@ -1965,6 +2284,9 @@ export async function createWorld(opts) {
     gateGuard(H3, nexoraHQ, { shirt: '#2b2850', pants: '#2b2850', hair: '#241f4d', skin: '#d9a07a', hat: 'beanie', hatColor: '#4b3fa6', shoes: '#241f4d', longSleeve: true, belt: '#8f7fe6' });
     courierRun(H3, nexoraHQ, { shirt: '#ff9f43', pants: '#2b2850', hair: '#241f4d', skin: '#e0a98a', hat: 'beanie', hatColor: '#ff9f43', shorts: true, shoes: '#fff8ec' }, '#c9bfff');
     teamSink = null;
+    addNightCrew(H, '#ff4fa3');
+    addNightCrew(H2, '#1fbf8f');
+    addNightCrew(H3, '#8f7fe6');
   });
 
   /* ---------------------------------------------------------------- */
@@ -1974,11 +2296,11 @@ export async function createWorld(opts) {
   /*   FOUNDER'S OFFICE, where he can chat with Murari (AI).            */
   /* ---------------------------------------------------------------- */
   const KK = OFFICE_SCALE / 0.72;                 // camera framing grows with the offices
-  const visit = { active: false, id: null, token: 0, pending: null, cast: null, cam: [], name: '' };
+  const visit = { active: false, id: null, token: 0, pending: null, cast: null, cam: [], focus: null, name: '', teamHidden: null, atOwner: false, ownerChat: false };
   const visitCast = {};
   const CANCEL = { cancelled: true };
   const delay = (sec) => new Promise((r) => setTimeout(r, sec * 1000));
-  const GUIDE_POST = [0.55, 1.95], VISITOR_START = [0, 6.2], ME_POST = [-3.9, 2.0];
+  const GUIDE_POST = [4.1, 1.95], VISITOR_START = [0, 6.2], ME_POST = [-3.9, 2.0];
 
   await stage(0.82, 'Hiring receptionists', () => {
     const meLook = { shirt: '#ff6b5e', pants: '#2b2850', hair: '#241f4d', backpack: '#e8b23a', skin: '#e9b48d', shoes: '#fff8ec' };
@@ -1991,10 +2313,22 @@ export async function createWorld(opts) {
     Object.keys(offices).forEach((id) => {
       const off = offices[id], grp = off.H;
       const guide = makeAgent(makePerson(guideLooks[id]), grp, { x: GUIDE_POST[0], z: GUIDE_POST[1], face: [0, 1], ground: hqGround, speed: 1.05, steps: [{ wait: Infinity, pose: 'talk', face: [0, 1] }] });
-      const me = makeAgent(makePerson(meLook), grp, { x: ME_POST[0], z: ME_POST[1], face: [1, 0], ground: hqGround, speed: 1.0, steps: [{ wait: Infinity, pose: 'talk', face: [1, 0] }] });
+      const me = makeAgent(makePerson(meLook), grp, { x: ME_POST[0], z: ME_POST[1], face: [1, 0], ground: hqGround, speed: 1.0, steps: [{ wait: Infinity, pose: 'sit', face: [1, 0] }] });
       const visitor = makeAgent(makePerson(visitorLook), grp, { x: VISITOR_START[0], z: VISITOR_START[1], face: [0, -1], ground: hqGround, speed: 1.05, steps: [{ wait: Infinity, pose: 'idle', face: [0, -1] }] });
       visitor.hidden = true;
       visitCast[id] = { guide, me, visitor };
+      animators.push((dt) => {
+        const following = visit.active && visit.id === id;
+        const dx = visitor.x - me.x, dz = visitor.z - me.z;
+        const c = Math.cos(me.heading), s = Math.sin(me.heading);
+        const localX = dx * c - dz * s, localZ = dx * s + dz * c;
+        const gaze = following ? clamp(localZ / Math.max(Math.abs(localX), 0.45), -0.75, 0.75) : 0;
+        me.p.pupils.forEach((eye) => {
+          const k = Math.min(1, dt * 7);
+          eye.mesh.position.z += (eye.z + gaze * 0.018 - eye.mesh.position.z) * k;
+          eye.mesh.position.y += (eye.y - eye.mesh.position.y) * k;
+        });
+      });
     });
   });
 
@@ -2021,36 +2355,51 @@ export async function createWorld(opts) {
     const step = async (p) => { const r = await p; chk(); return r; };
     const say = (agent, title, text) => { bubbleHead = agent; speak(title, text, accent); };
     try {
-      visit.active = true; visit.id = id; visit.cast = cast; visit.name = '';
+      visit.active = true; visit.id = id; visit.cast = cast; visit.name = ''; visit.focus = null; visit.following = false; visit.atOwner = false; visit.ownerChat = false;
+      visit.teamHidden = off.team.map((agent) => agent.hidden);
       onVisitState('walking'); onInput({ mode: 'off' });
       off.gate.hold = true;                                              // gate and glass door open
       const { guide, me, visitor } = cast;
-      guide.x = GUIDE_POST[0]; guide.z = GUIDE_POST[1]; drive(guide, [{ wait: Infinity, pose: 'talk', face: [0, 1] }]);
-      visitor.x = VISITOR_START[0]; visitor.z = VISITOR_START[1]; visitor.hidden = false;
+      drive(me, [{ wait: Infinity, pose: 'sit', face: [1, 0] }]);
+      guide.hidden = false;
+      guide.x = 0; guide.z = 2.55; drive(guide, [{ wait: Infinity, pose: 'talk', face: [0, 1] }]);
+      off.team.forEach((agent) => { agent.hidden = false; });
+      visitor.x = VISITOR_START[0]; visitor.z = VISITOR_START[1]; visitor.hidden = true;
       visit.cam = [visitor];
       say(guide, 'Reception', 'The gate and the door are open. A visitor is arriving…');
-      await step(goThen(visitor, [[0, 4.6], [0, 3.6], [0.55, 3.0]], { face: [0, -1] }));
+      await step(goThen(visitor, [[0, 5.4], [0, 4.8], [0.55, 4.2]], { face: [0, -1] }));
 
-      visit.cam = [visitor, guide];
+      visit.cam = [visitor];
       say(guide, 'Receptionist · ' + company, 'Good day, and welcome to ' + company + '! May I have your name, please?');
       const name = await step(askName());
       visit.name = name; onInput({ mode: 'off' });
       say(guide, 'Receptionist · ' + company, 'Welcome, ' + name + '! Sir, please come with me. I will show you our cabins and drop you at the founder\'s office.');
       await step(delay(3.6));
+      visit.cam = [visitor];
 
       const stops = [0, 1, 2, 3].map((i) => DESK_X0(i) - 0.75);
       for (let i = 0; i < stops.length; i++) {
-        const gp = i === 0 ? [[0, 1.7], [0, 0.9], [0, 0.2], [stops[0] + 0.55, 0.1]] : [[stops[i] + 0.55, 0.1]];
-        const vp = i === 0 ? [[0, 2.5], [0, 1.4], [0, 0.55], [stops[0] - 0.25, 0.1]] : [[stops[i] - 0.25, 0.1]];
+        guide.hidden = false;
+        const gp = i === 0 ? [[0, 1.7], [0, 0.9], [0, 0.2], [stops[0] + 0.55, 1.0]] : [[stops[i] + 0.55, 1.0]];
+        const vp = i === 0 ? [[0, 2.5], [0, 1.4], [0, 0.55], [DESK_X0(0), -0.5]] : [[DESK_X0(i), -0.5]];
         await step(Promise.all([goThen(guide, gp, { pose: 'point', face: [0, -1] }), goThen(visitor, vp, { face: [0, -1] })]));
+        guide.hidden = true;
         const info = team[i] || {};
+        visit.cam = [visitor];
+        visit.focus = [DESK_X0(i) - 0.77, FLOOR + 1.05, -1.55];
         say(guide, 'Cabin ' + (i + 1) + ' · ' + (info.role || 'Team member'), info.say || '');
         await step(delay(3.2 + (info.say || '').length * 0.035));
       }
 
+      off.team.forEach((agent, index) => { agent.hidden = visit.teamHidden[index]; });
+      visit.teamHidden = null;
+      visit.cam = [visitor];
+      visit.focus = null;
+      guide.hidden = false;
       say(guide, 'Receptionist · ' + company, 'And now, sir, the founder\'s office. Please follow me.');
-      const gOut = [[stops[3] - 0.2, 0.1], [0.3, 0.12], [0, 0.4], [0, 1.2], [0, 1.9], [-0.6, 2.0], [-1.15, 1.45]];
-      const vOut = [[stops[3] - 0.9, 0.1], [0.3, 0.2], [0, 0.55], [0, 1.4], [0, 2.1], [-0.9, 2.0], [-1.6, 2.0], [-2.75, 2.0]];
+      visit.atOwner = true;
+      const gOut = [[stops[3] - 0.2, 1.0], [0.3, 0.12], [0, 0.4], [0, 1.2], [0, 1.9], [-0.6, 2.0], [-1.15, 1.45]];
+      const vOut = [[stops[3] - 0.9, -0.5], [0.3, 0.2], [0, 0.55], [0, 1.4], [0, 2.1], [-0.9, 2.0], [-1.6, 2.0], [-2.55, 2.0], [-3.3, 2.0]];
       await step(Promise.all([goThen(guide, gOut, { pose: 'point', face: [-1, 0.2] }), goThen(visitor, vOut, { face: [-1, 0] })]));
 
       visit.cam = [visitor, me];
@@ -2058,20 +2407,33 @@ export async function createWorld(opts) {
       await step(delay(2.8));
       goThen(guide, [[-0.6, 2.0], [0, 1.9], GUIDE_POST], { pose: 'talk', face: [0, 1] });
       say(me, 'Murari Kumar · Founder', 'Welcome, ' + name + '! Please ask me anything: my projects, skills, studies or this company.');
+      visitor.hidden = true;
+      visit.cam = [visitor, me];
+      visit.focus = null;
+      visit.ownerChat = true;
       onVisitState('chat');
       onInput({ mode: 'chat', who: 'murari', name, placeholder: 'Ask Murari anything…' });
     } catch (err) {
+      if (visit.teamHidden) {
+        off.team.forEach((agent, index) => { agent.hidden = visit.teamHidden[index]; });
+        visit.teamHidden = null;
+      }
       if (err !== CANCEL) console.warn('Visit stopped:', err);
     }
   }
 
   function cancelVisit() {
     if (!visit.active) return;
-    visit.token++; visit.active = false; visit.pending = null; visit.cam = [];
+    visit.token++; visit.active = false; visit.pending = null; visit.cam = []; visit.focus = null; visit.atOwner = false; visit.ownerChat = false;
     const cast = visit.cast, id = visit.id;
     if (cast) {
       cast.visitor.hidden = true; cast.visitor.x = VISITOR_START[0]; cast.visitor.z = VISITOR_START[1];
+      cast.guide.hidden = false;
       cast.guide.x = GUIDE_POST[0]; cast.guide.z = GUIDE_POST[1]; drive(cast.guide, [{ wait: Infinity, pose: 'talk', face: [0, 1] }]);
+    }
+    if (id && offices[id] && visit.teamHidden) {
+      offices[id].team.forEach((agent, index) => { agent.hidden = visit.teamHidden[index]; });
+      visit.teamHidden = null;
     }
     if (id && offices[id]) offices[id].gate.hold = false;
     onVisitState('ended');
@@ -2083,7 +2445,7 @@ export async function createWorld(opts) {
   }
 
   /* ---------------------------------------------------------------- */
-  /* 8.5 the west district, the lake and the lighthouse                */
+  /* 8.5 the west district and lake                                    */
   /* ---------------------------------------------------------------- */
   await stage(0.84, 'Growing the west district', () => {
     const cx = (CITY2.x0 + CITY2.x1) / 2, cz = (CITY2.z0 + CITY2.z1) / 2, STREET_Z = 21.5;
@@ -2092,31 +2454,6 @@ export async function createWorld(opts) {
     slab(W, cx, STREET_Z - 1.15, CITY2.x1 - CITY2.x0, 0.6, '#f4f0ff', 0.05, 0.06);
     slab(W, cx, STREET_Z + 1.15, CITY2.x1 - CITY2.x0, 0.6, '#f4f0ff', 0.05, 0.06);
     for (let i = 0; i < 17; i++) box(W, 0.45, 0.012, 0.07, CITY2.x0 + 0.8 + i * 1.0, 0.08, STREET_Z, '#fff1dc').castShadow = false;
-
-    const winTex2 = canvasTexture((g, s) => {
-      g.fillStyle = '#e6e0fa'; g.fillRect(0, 0, s, s);
-      g.fillStyle = '#6ad0ff'; g.fillRect(34, 30, 60, 68);
-      g.fillStyle = 'rgba(255,255,255,0.55)'; g.fillRect(34, 30, 60, 14);
-    }, 128);
-    winTex2.wrapS = winTex2.wrapT = THREE.RepeatWrapping;
-    const tower = (x, z, w, d, h, tint, roofC) => {
-      const side = (len) => {
-        const t = winTex2.clone(); t.needsUpdate = true; t.repeat.set(Math.max(1, Math.round(len * 1.1)), Math.max(1, Math.round(h * 1.1)));
-        return new THREE.MeshLambertMaterial({ color: tint, map: t });
-      };
-      const roof = new THREE.MeshLambertMaterial({ color: roofC });
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [side(d), side(d), roof, roof, side(w), side(w)]);
-      m.position.set(x, h / 2 + 0.05, z); m.castShadow = true; m.receiveShadow = true; W.add(m);
-      box(W, w * 0.55, 0.3, d * 0.55, x, h + 0.2, z, '#8a84b8');
-      if (h > 6) {
-        cyl(W, 0.03, 0.04, 1.0, 5, x, h + 0.85, z, '#d8d2ff');
-        ball(W, 0.08, x, h + 1.4, z, '#ff6b5e', { emissive: '#ff6b5e', emissiveIntensity: 1 }).castShadow = false;
-      }
-    };
-    const NORTH = [[-28.2, 7.5, '#cdbff5', '#4b3fa6'], [-24.6, 5.2, '#bff0ee', '#2b2850'], [-21.0, 9.0, '#ffd0de', '#6c58cf'], [-17.4, 4.4, '#d8f5c8', '#3a2f5b']];
-    const SOUTH = [[-28.2, 4.2, '#ffe6b8', '#8a5a44'], [-24.4, 6.6, '#cfe0ff', '#4b3fa6'], [-20.6, 5.0, '#f5ccff', '#6c58cf'], [-16.8, 8.2, '#bff0ee', '#2b2850']];
-    NORTH.forEach(([x, h, tint, rf]) => tower(x, 17.6, 2.4, 2.4, h, tint, rf));
-    SOUTH.forEach(([x, h, tint, rf]) => tower(x, 25.4, 2.4, 2.4, h, tint, rf));
 
     // fountain plaza
     const fo = new THREE.Group(); fo.position.set(-14.4, 0, 26.2); W.add(fo);
@@ -2175,7 +2512,7 @@ export async function createWorld(opts) {
     });
   });
 
-  await stage(0.87, 'Filling the lake and lighting the lighthouse', () => {
+  await stage(0.87, 'Filling the lake', () => {
     // lake with a pier and a rowing boat
     const lake = new THREE.Group(); lake.position.set(31, 0, 8); W.add(lake);
     cyl(lake, 4.7, 4.9, 0.06, 28, 0, -0.11, 0, '#c9b28a').castShadow = false;
@@ -2206,21 +2543,6 @@ export async function createWorld(opts) {
     const angler = makePerson({ shirt: '#ff9f43', pants: '#6a5a45', hair: '#241f4d', hat: 'straw', skin: '#e0a98a', shoes: '#8a5a44' });
     makeAgent(angler, lake, { x: -4.0, z: 0.0, face: [1, 0], ground: () => 0.2, steps: [{ wait: Infinity, pose: 'sit' }] });
 
-    // lighthouse (moved a little inland so the railway can run round the island)
-    const lh = new THREE.Group(); lh.position.set(29, 0, 25); W.add(lh);
-    cyl(lh, 2.3, 2.5, 0.25, 12, 0, 0.12, 0, '#8a84b8');
-    for (let i = 0; i < 5; i++) cyl(lh, 0.8 - i * 0.08, 0.9 - i * 0.08, 0.9, 12, 0, 0.7 + i * 0.9, 0, i % 2 ? '#e8564a' : '#fff8ec');
-    cyl(lh, 0.78, 0.7, 0.14, 12, 0, 5.3, 0, '#2b2850');
-    cyl(lh, 0.46, 0.46, 0.6, 10, 0, 5.7, 0, '#fff3b0', { emissive: '#ffd36e', emissiveIntensity: 1 }).castShadow = false;
-    cone(lh, 0.62, 0.55, 10, 0, 6.28, 0, '#e8564a');
-    ball(lh, 0.08, 0, 6.65, 0, '#ffd36e', { emissive: '#ffd36e', emissiveIntensity: 1 }).castShadow = false;
-    box(lh, 0.3, 0.55, 0.04, 0, 0.45, 0.8, '#6c58cf');
-    const lhGlow = glow(lh, 0xffe08a, 4.2, 0.6, 0, 5.7, 0);
-    const beam = new THREE.Group(); beam.position.set(0, 5.7, 0); lh.add(beam);
-    const bm = new THREE.Mesh(new THREE.ConeGeometry(1.1, 9, 16, 1, true), new THREE.MeshBasicMaterial({ color: '#fff3b0', transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
-    bm.rotation.z = Math.PI / 2; bm.position.x = 4.5; beam.add(bm);
-    const bm2 = bm.clone(); bm2.rotation.z = -Math.PI / 2; bm2.position.x = -4.5; beam.add(bm2);
-    animators.push((dt, t) => { beam.rotation.y += dt * 0.9; lhGlow.material.opacity = 0.5 + Math.sin(t * 3) * 0.12; });
   });
 
   /* ---------------------------------------------------------------- */
@@ -2493,7 +2815,11 @@ export async function createWorld(opts) {
   function hideBubble() { bubbleHead = null; speakMark.visible = false; onSpeakEnd(); dirty = true; }
   function endTour() { tour.active = false; tour.i = -1; aboutTimer = 0; hideBubble(); }
   function setCutaway(activeId) {
-    Object.keys(offices).forEach((k) => { const r = offices[k].roof; if (r) r.visible = k !== activeId; });
+    Object.keys(offices).forEach((k) => {
+      const office = offices[k];
+      if (office.roof) office.roof.visible = k !== activeId;
+      (office.visitOccluders || []).forEach((object) => { object.visible = k !== activeId; });
+    });
     dirty = true;
   }
 
@@ -2524,18 +2850,42 @@ export async function createWorld(opts) {
   }
 
   function updateTourAndBubble(dt) {
-    if (visit.active && visit.cam.length && mode === 'section' && !flight) {          // follow the visitor (and who he is with)
-      vA.set(0, 0, 0); let n = 0;
-      visit.cam.forEach((ag) => { ag.p.head.getWorldPosition(vHead); vA.add(vHead); n++; });
-      vA.multiplyScalar(1 / Math.max(1, n));
-      let span = 0;
-      if (visit.cam.length > 1) { visit.cam[0].p.head.getWorldPosition(vHead); visit.cam[1].p.head.getWorldPosition(vB); span = vHead.distanceTo(vB); }
-      if (!tour.pos.lengthSq() || !visit.following) { tour.pos.copy(camera.position); tour.tgt.copy(controls.target); visit.following = true; }
-      const k = 1 - Math.exp(-dt * 2.6);
-      const dist = (3.4 + span * 0.95) * KK;
-      tour.pos.lerp(vB.set(vA.x + 0.9 * KK, vA.y + 0.35 * KK, vA.z + dist), k);
-      tour.tgt.lerp(vHead.set(vA.x, vA.y - 0.25, vA.z), k);
-      camera.position.copy(tour.pos); controls.target.copy(tour.tgt); camera.lookAt(tour.tgt); dirty = true;
+    if (visit.active && visit.cam.length && mode === 'section' && !flight) {
+      const visitor = visit.cast && visit.cast.visitor;
+      const firstPerson = visit.cam[0] === visitor;
+      if (firstPerson) {
+        visitor.p.head.getWorldPosition(vA);
+        const forward = vB.set(Math.cos(visitor.heading), 0, -Math.sin(visitor.heading));
+        const cameraOffset = visit.cam[1] ? 0.65 : 2.6;
+        const cameraPosition = vHead.set(vA.x - forward.x * cameraOffset, vA.y + 0.55, vA.z - forward.z * cameraOffset);
+        let target;
+        if (visit.focus) {
+          const office = offices[visit.id];
+          target = vB.set(...visit.focus);
+          if (office) office.H.localToWorld(target);
+        } else if (visit.cam[1]) {
+          visit.cam[1].p.head.getWorldPosition(vB);
+          target = vB;
+        } else {
+          target = vB.set(vA.x + forward.x * 3.5, vA.y - 0.08, vA.z + forward.z * 3.5);
+        }
+        if (!visit.following) { tour.pos.copy(camera.position); tour.tgt.copy(controls.target); visit.following = true; }
+        const k = 1 - Math.exp(-dt * 3.2);
+        tour.pos.lerp(cameraPosition, k); tour.tgt.lerp(target, k);
+        camera.position.copy(tour.pos); controls.target.copy(tour.tgt); camera.lookAt(tour.tgt); dirty = true;
+      } else {
+        vA.set(0, 0, 0);
+        visit.cam.forEach((ag) => { ag.p.head.getWorldPosition(vHead); vA.add(vHead); });
+        vA.multiplyScalar(1 / visit.cam.length);
+        let span = 0;
+        if (visit.cam.length > 1) { visit.cam[0].p.head.getWorldPosition(vHead); visit.cam[1].p.head.getWorldPosition(vB); span = vHead.distanceTo(vB); }
+        if (!tour.pos.lengthSq() || !visit.following) { tour.pos.copy(camera.position); tour.tgt.copy(controls.target); visit.following = true; }
+        const k = 1 - Math.exp(-dt * 2.6);
+        const dist = (3.4 + span * 0.95) * KK;
+        tour.pos.lerp(vB.set(vA.x + 0.9 * KK, vA.y + 0.35 * KK, vA.z + dist), k);
+        tour.tgt.lerp(vHead.set(vA.x, vA.y - 0.25, vA.z), k);
+        camera.position.copy(tour.pos); controls.target.copy(tour.tgt); camera.lookAt(tour.tgt); dirty = true;
+      }
     } else visit.following = false;
     if (mode === 'section' && !flight) {
       if (sectionId === 'about' && bubbleHead && aboutLines.length > 1 && !aboutPaused) {
@@ -2566,6 +2916,7 @@ export async function createWorld(opts) {
     const v = views[id];
     if (!v || disposed) return;
     mode = id === 'home' || id === 'explore' ? id : 'section';
+    if (playerAgent) playerAgent.hidden = mode !== 'explore' || !walkingEnabled;
     markers.visible = mode !== 'section';
     setPick(null);
     cancelVisit(); onInput({ mode: 'off' });
@@ -2622,14 +2973,63 @@ export async function createWorld(opts) {
     controls.update(); dirty = true;
   }
 
+  function routePlayerTo(x, z, id) {
+    if (!playerAgent || !walkingEnabled || mode !== 'explore') return false;
+    const route = id === 'manual' ? [[x, z]] : roadPath(playerAgent.x, playerAgent.z, x, z, 0.42, 4);
+    const last = route[route.length - 1];
+    if (!last || Math.hypot(last[0] - x, last[1] - z) > 0.5) route.push([x, z]);
+    playerGoal = { id, x, z };
+    playerAgent.hidden = false;
+    drive(playerAgent, route.map((point) => ({ go: point })));
+    return true;
+  }
+
+  function moveByScreenDirection(horizontal, vertical) {
+    if (!playerAgent || !walkingEnabled || mode !== 'explore') return false;
+    const forward = controls.target.clone().sub(camera.position);
+    forward.y = 0;
+    if (forward.lengthSq() < 0.001) return false;
+    forward.normalize();
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
+    const direction = right.multiplyScalar(horizontal).addScaledVector(forward, -vertical);
+    if (direction.lengthSq() < 0.001) return false;
+    direction.normalize();
+    const origin = playerGoal && playerGoal.id === 'manual'
+      ? { x: playerGoal.x, z: playerGoal.z }
+      : playerAgent;
+    const x = origin.x + direction.x * 1.15, z = origin.z + direction.z * 1.15;
+    if (Math.hypot(x, z) > R - 2.5) return false;
+    return routePlayerTo(x, z, 'manual');
+  }
+
+  function routePlayerFromScreen(clientX, clientY) {
+    if (!playerAgent || !walkingEnabled || mode !== 'explore') return false;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    ndc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    rayPick.setFromCamera(ndc, camera);
+    const hit = terrain && rayPick.intersectObject(terrain, false)[0];
+    if (!hit) return false;
+    const destination = W.worldToLocal(hit.point.clone());
+    if (Math.hypot(destination.x, destination.z) > R - 2) return false;
+    const nearest = Object.entries(config.walkLocations || {}).find(([, point]) =>
+      Math.hypot(destination.x - point[0], destination.z - point[1]) < 2.5);
+    return routePlayerTo(destination.x, destination.z, nearest ? nearest[0] : 'road');
+  }
+
   const holdFor = (ms) => { userHold = true; refreshAuto(); clearTimeout(holdTimer); holdTimer = setTimeout(() => { userHold = false; refreshAuto(); }, ms); };
   let down = null, hoverRaf = 0, lastMove = null;
   listen(canvas, 'pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: performance.now() }; onUserInteract(); userHold = true; refreshAuto(); });
   listen(canvas, 'pointerup', (e) => {
     holdFor(3500);
-    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 7 && performance.now() - down.t < 700 && !flight && (mode === 'home' || mode === 'explore')) {
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 7 && performance.now() - down.t < 700 && !flight && mode === 'explore') {
       const id = pick(e.clientX, e.clientY);
-      if (id) onHotspotClick(id);
+      if (id && walkingEnabled) {
+        const point = (config.walkLocations || {})[id];
+        if (point) routePlayerTo(point[0], point[1], id);
+        else onHotspotClick(id);
+      } else if (id) onHotspotClick(id);
+      else if (walkingEnabled) routePlayerFromScreen(e.clientX, e.clientY);
     }
     // double-click / double-tap on empty canvas inside a visit = next person
     if (down && mode === 'section' && !flight && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 9 && performance.now() - down.t < 500) {
@@ -2804,6 +3204,24 @@ export async function createWorld(opts) {
     nudge,
     setHover: (id) => { domHoverId = id; dirty = true; },
     setAutoRotate: (on) => { wantAuto = !!on; refreshAuto(); },
+    setWalkerEnabled(on) {
+      walkingEnabled = !!on;
+      if (playerAgent) playerAgent.hidden = !walkingEnabled || mode !== 'explore';
+      if (!walkingEnabled) playerGoal = null;
+      dirty = true;
+    },
+    walkTo(id) {
+      const point = (config.walkLocations || {})[id];
+      if (!point) return false;
+      walkingEnabled = true;
+      if (mode !== 'explore') flyTo('explore');
+      return routePlayerTo(point[0], point[1], id);
+    },
+    moveByScreenDirection,
+    setHomeVisitVisible(on) {
+      homeVisitActive = !!on;
+      if (homeResident) homeResident.hidden = !homeVisitActive && !homeScheduledVisible;
+    },
     playIntro() {
       if (!animate) { flyTo('home'); return; }
       fovBoost = 16; refreshFov();

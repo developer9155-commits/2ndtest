@@ -20,7 +20,8 @@
         every cabin and into the FOUNDER'S OFFICE, where you can ask
         Murari anything (answers come from Groq AI, see config.ai below).
      3. Press "Leave office" to finish. Afterwards you can DOUBLE-CLICK on
-        empty space to meet the team one by one.
+        empty space to meet the team one by one. In Explore, click the road
+        to walk or choose a project's "Walk to" button for directions.
    ===================================================================== */
 
 export const CONFIG = {
@@ -38,12 +39,10 @@ export const CONFIG = {
     healthgisLive: '',
   },
 
-  /* ---- AI chat (Groq, called straight from the browser: no backend) ----
-     1. Create a key at https://console.groq.com/keys and paste it below.
-     2. WARNING: anything in a front-end file can be read by every visitor.
-        Use a key that is only for this site, watch its usage in the Groq
-        console and rotate it if it is abused.
-     3. model: Groq retired llama-3.3-70b-versatile on 16 Aug 2026, so the
+  /* ---- AI chat (Groq) ----------------------------------------------
+     Keep apiKey empty in a public website. Browser files are visible to
+     every visitor; connect a server-side endpoint before enabling AI.
+     Model note: Groq retired llama-3.3-70b-versatile on 16 Aug 2026, so the
         site uses openai/gpt-oss-120b. If it is ever removed, the site
         tries the fallback models in order. Check the live list at
         https://console.groq.com/docs/models                              */
@@ -63,6 +62,25 @@ export const CONFIG = {
       'Contact: email murarikumarstm102@gmail.com, GitHub https://github.com/developer8709-max',
       'Looking for chances to work with other developers, learn from real projects and build products that help people.',
     ].join('\n'),
+  },
+
+  /* In-world schedule only; it describes the portfolio character, not
+     Murari's real-time location. Times use India Standard Time. */
+  schedule: {
+    timeZone: 'Asia/Kolkata',
+    homeStart: 10,
+    officeStart: 12,
+    officeEnd: 24,
+  },
+
+  walkLocations: {
+    house: [1.5, 20.8],
+    astropulse: [-6.0, 22.6],
+    healthgis: [-15.5, 13.6],
+    nexora: [24.0, 0.6],
+    crop: [10.3, 4.0],
+    station: [20.9, 32.6],
+    airport: [-22.6, 7.4],
   },
 
   text: {
@@ -163,6 +181,9 @@ export const CONFIG = {
   views: {
     home:      { position: [20, 12, 30],  target: [0, 2, 6] },
     explore:   { position: [22, 26, 38],  target: [0, 1, 6] },
+    house:     { position: [8, 10, 27],   target: [1.5, 1.2, 19.3] },
+    station:   { position: [43, 32, 75],  target: [23, 2, 36] },
+    airport:   { position: [-25, 26, -37], target: [-28, 2, -4] },
     education: { position: [-4.4, 4.4, 5.4], target: [-9.4, 1.0, -1.2] },
   },
 
@@ -175,7 +196,7 @@ export const CONFIG = {
     {
       id: 'about',
       label: 'About me',
-      preview: 'A Diploma CSE student who builds for the web, Android and AI.',
+      preview: '',
       color: '#ff6b5e',
       position: [-4.5, 2.3, 7.4],
       camera: { position: [-0.2, 3.6, 13.6], target: [-4.8, 0.9, 7.2] },
@@ -183,7 +204,7 @@ export const CONFIG = {
     {
       id: 'skills',
       label: 'Skills',
-      preview: 'The languages, platforms and tools I work with.',
+      preview: '',
       color: '#8f7fe6',
       position: [2.0, 3.7, 9.5],
       camera: { position: [7.4, 4.3, 16.4], target: [2.0, 1.5, 9.5] },
@@ -195,15 +216,15 @@ export const CONFIG = {
       preview: 'Featured project: an AI website builder that helps you publish online.',
       color: '#8f7fe6',
       position: [24.0, 8.4, -5.2],
-      camera: { position: [28.2, 6.6, 12.0], target: [24.0, 1.0, -3.6] },
+      camera: { position: [24.0, 19.0, 12.0], target: [24.0, 3.0, -4.0] },
     },
     {
       id: 'healthgis',
       label: 'HealthGIS',
       preview: 'Health information on interactive maps. Visit the team inside.',
       color: '#1fbf8f',
-      position: [-15.5, 8.4, 6.3],
-      camera: { position: [-11.3, 6.6, 23.6], target: [-15.5, 1.0, 7.3] },
+      position: [-15.5, 8.4, 7.8],
+      camera: { position: [-15.5, 20.5, 19.5], target: [-15.5, 3.0, 9.0] },
     },
     {
       id: 'crop',
@@ -219,7 +240,7 @@ export const CONFIG = {
       preview: 'A social media marketing office with a team of nine, in the city.',
       color: '#ff4fa3',
       position: [-6.0, 8.4, 16.8],
-      camera: { position: [-1.8, 6.6, 34.0], target: [-6.0, 1.0, 17.8] },
+      camera: { position: [-6.0, 19.0, 31.0], target: [-6.0, 3.0, 18.0] },
     },
     {
       id: 'contact',

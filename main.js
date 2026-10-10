@@ -144,6 +144,35 @@ async function boot() {
       onSpeakEnd: () => { if (inputMode === 'off') hideDock(); },
       onInput: onInputMessage,
       onVisitState: onVisitState,
+      onNightChange: (night) => sound.setNight(night),
+      onWalkArrive: (id) => {
+        if (id === 'house') {
+          closePanels();
+          lastBase = 'explore';
+          setView('house');
+          world.setHomeVisitVisible(true);
+          world.flyTo('house');
+          setCaption('Murari · at home', 'Welcome! You can ask me about my projects, skills or studies.');
+          onInputMessage({ mode: 'chat', who: 'about', placeholder: 'Ask me anything about Murari…' });
+        } else if (id === 'station' || id === 'airport') {
+          closePanels();
+          closeMenu();
+          hideHint();
+          lastBase = 'explore';
+          setView(id);
+          world.flyTo(id);
+          setCaption(
+            id === 'station' ? 'Railway station' : 'Airport',
+            id === 'station'
+              ? 'Take a look around the island station. Press Exit world to return to the start.'
+              : 'Explore the island airport and runway. Press Exit world to return to the start.',
+          );
+        } else if (id === 'road') {
+          toast('You reached the spot. Click another part of the road to keep walking.');
+        } else {
+          openSection(id);
+        }
+      },
       onWarning: (msg) => toast(msg),
       onError: (err) => {
         console.error(err);
@@ -293,6 +322,7 @@ dockForm.addEventListener('submit', async (e) => {
 
 function onVisitState(state) {
   visitState = state;
+  body.classList.toggle('owner-chat-active', state === 'chat');
   btnLeave.hidden = !(state === 'walking' || state === 'chat');
   if (state === 'walking') { setPanelHidden(true); toast('A visitor is walking in. Type your name at reception!', 5200); }
 }
@@ -310,20 +340,33 @@ function updatePanelUi() {
   const open = $$('.panel.is-open').length > 0, shown = open && !panelUserHidden;
   body.classList.toggle('panel-open', shown);
   btnDetails.hidden = !(open && panelUserHidden);
+  btnDetails.setAttribute('aria-expanded', String(shown));
+  const activePanel = $$('.panel.is-open')[0];
+  btnDetails.setAttribute('aria-controls', activePanel ? activePanel.id : '');
+  $$('.panel').forEach((panel) => {
+    const hidden = panel.classList.contains('is-open') && panelUserHidden;
+    panel.setAttribute('aria-hidden', String(hidden));
+    const hideButton = panel.querySelector('.panel-hide');
+    if (hideButton) hideButton.setAttribute('aria-expanded', String(!hidden));
+  });
   if (world) world.setViewShift(shown && !isNarrow() ? 0.13 : 0, shown && isNarrow() ? 0.17 : 0, 0.9);
 }
-function setPanelHidden(on) {
+function setPanelHidden(on, moveFocus = false) {
+  const openPanel = $$('.panel.is-open')[0];
+  const focusWasInPanel = !!(openPanel && openPanel.contains(document.activeElement));
   panelUserHidden = on;
   $$('.panel').forEach((p) => p.classList.toggle('is-hidden-by-user', on && p.classList.contains('is-open')));
   updatePanelUi();
+  if (on && (moveFocus || focusWasInPanel)) btnDetails.focus({ preventScroll: true });
+  if (!on && moveFocus && openPanel) openPanel.querySelector('.panel-hide').focus({ preventScroll: true });
 }
 $$('.panel-bar').forEach((bar) => {
   const b = document.createElement('button');
   b.type = 'button'; b.className = 'chip-btn panel-hide'; b.textContent = 'Hide'; b.setAttribute('aria-label', 'Hide these details so the scene is fully visible');
-  b.addEventListener('click', () => setPanelHidden(true));
+  b.addEventListener('click', () => setPanelHidden(true, true));
   bar.insertBefore(b, bar.firstChild);
 });
-btnDetails.addEventListener('click', () => setPanelHidden(false));
+btnDetails.addEventListener('click', () => setPanelHidden(false, true));
 
 /* ------------------------------------------------------------------ */
 /* 4. views, panels, menu                                              */
@@ -339,6 +382,7 @@ function hideHint() { if (hint) hint.classList.remove('is-visible'); clearTimeou
 
 function setView(view) {
   currentView = view;
+  if (view !== 'explore') releaseJoystick();
   const mode = view === 'home' ? 'home' : view === 'explore' ? 'explore' : 'section';
   body.dataset.view = mode;
 }
@@ -349,21 +393,31 @@ function closePanels() {
   panelUserHidden = false; updatePanelUi();
 }
 
-// On the home screen the text sits on the left (desktop) or bottom (phone), so slide the world the other way.
+// Keep the opening text in the left-side sky area.
 const homeShift = () => (isNarrow() ? [0, 0.1] : [-0.11, 0]);
 
 function goHome() {
   closeMenu(); closePanels(); hideHint();
   setView('home'); lastBase = 'home';
-  if (world) { world.flyTo('home'); world.setAutoRotate(true); world.setViewShift(...homeShift(), 1.2); }
+  if (world) { world.setHomeVisitVisible(false); world.setWalkerEnabled(false); world.flyTo('home'); world.setAutoRotate(true); world.setViewShift(...homeShift(), 1.2); }
   sound.whoosh();
 }
 
 function goExplore() {
   closeMenu(); closePanels();
   setView('explore'); lastBase = 'explore';
-  if (world) { world.flyTo('explore'); world.setAutoRotate(false); }
+  if (world) { world.setHomeVisitVisible(false); world.flyTo('explore'); world.setWalkerEnabled(true); world.setAutoRotate(false); }
   showHint();
+}
+
+function walkToLocation(id) {
+  if (!world) return;
+  closeMenu(); closePanels(); hideHint();
+  setView('explore'); lastBase = 'explore';
+  world.setHomeVisitVisible(false);
+  world.setWalkerEnabled(true);
+  if (!world.walkTo(id)) toast('This destination is not available yet.');
+  else toast('Follow the road to your destination. Click the road to change direction.', 5200);
 }
 
 const TOUR_TIPS = {
@@ -388,7 +442,11 @@ function openSection(id) {
   if (panel) {
     panel.classList.add('is-open');
     panel.scrollTop = 0;
-    setTimeout(() => { try { panel.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }, 450);
+    setTimeout(() => {
+      if (!panel.classList.contains('is-hidden-by-user')) {
+        try { panel.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+      }
+    }, 450);
     updatePanelUi();       // keeps the scene visible beside (desktop) or above (phone) the panel
   }
   sound.whoosh(); sound.open();
@@ -422,6 +480,85 @@ $('btn-explore').addEventListener('click', () => { sound.whoosh(); goExplore(); 
 $('brand-btn').addEventListener('click', () => { if (body.classList.contains('mode-3d')) goHome(); else window.scrollTo({ top: 0, behavior: 'smooth' }); });
 $('btn-reset').addEventListener('click', () => { if (currentView === 'home') goHome(); else if (lastBase === 'home' && currentView === 'explore') goHome(); else goExplore(); });
 $$('[data-close]').forEach((b) => b.addEventListener('click', closeSection));
+$$('[data-walk-to]').forEach((b) => b.addEventListener('click', (e) => {
+  e.preventDefault();
+  walkToLocation(b.dataset.walkTo);
+}));
+
+$('btn-exit-world').addEventListener('click', goHome);
+
+let walkRepeatTimer = 0;
+let lastKeyWalkAt = 0;
+let joystickPointer = null;
+const joystickDirection = { x: 0, y: 0 };
+const joystickBase = $('joystick-base'), joystickKnob = $('joystick-knob');
+function stopWalkRepeat() {
+  clearInterval(walkRepeatTimer);
+  walkRepeatTimer = 0;
+}
+function updateJoystick(event) {
+  const rect = joystickBase.getBoundingClientRect();
+  const travel = Math.max(1, (rect.width - joystickKnob.offsetWidth) / 2 - 10);
+  const dx = event.clientX - (rect.left + rect.width / 2);
+  const dy = event.clientY - (rect.top + rect.height / 2);
+  const length = Math.hypot(dx, dy), scale = length > travel ? travel / length : 1;
+  const x = dx * scale, y = dy * scale;
+  joystickDirection.x = x / travel;
+  joystickDirection.y = y / travel;
+  joystickKnob.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
+}
+function moveWithJoystick() {
+  if (!world || Math.hypot(joystickDirection.x, joystickDirection.y) < 0.18) return;
+  world.moveByScreenDirection(joystickDirection.x, joystickDirection.y);
+}
+function releaseJoystick() {
+  joystickPointer = null;
+  joystickDirection.x = 0; joystickDirection.y = 0;
+  joystickKnob.style.transform = 'translate(-50%, -50%)';
+  stopWalkRepeat();
+}
+joystickBase.addEventListener('pointerdown', (event) => {
+  if (body.dataset.view !== 'explore') return;
+  event.preventDefault();
+  joystickPointer = event.pointerId;
+  updateJoystick(event);
+  stopWalkRepeat();
+  moveWithJoystick();
+  walkRepeatTimer = setInterval(moveWithJoystick, 420);
+  try { joystickBase.setPointerCapture(event.pointerId); } catch (err) { /* ignore */ }
+});
+joystickBase.addEventListener('pointermove', (event) => {
+  if (event.pointerId === joystickPointer) updateJoystick(event);
+});
+joystickBase.addEventListener('pointerup', releaseJoystick);
+joystickBase.addEventListener('pointercancel', releaseJoystick);
+joystickBase.addEventListener('lostpointercapture', releaseJoystick);
+joystickKnob.addEventListener('click', (event) => {
+  if (event.detail === 0 && world) world.moveByScreenDirection(0, -1);
+});
+window.addEventListener('blur', releaseJoystick);
+
+const presence = $('presence-status');
+function updatePresence() {
+  const schedule = CONFIG.schedule || {};
+  const timeZone = schedule.timeZone || 'Asia/Kolkata';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === 'hour').value);
+  const homeStart = schedule.homeStart ?? 10;
+  const officeStart = schedule.officeStart ?? 12;
+  const officeEnd = schedule.officeEnd ?? 24;
+  const place = hour >= officeStart && hour < officeEnd
+    ? 'Astropulse SMM'
+    : hour >= homeStart && hour < officeStart ? 'Home' : 'Off duty';
+  presence.textContent = `In-world · ${place}`;
+  presence.title = `Portfolio character schedule · ${timeZone}`;
+}
+updatePresence();
+setInterval(updatePresence, 60_000);
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
@@ -432,6 +569,24 @@ document.addEventListener('keydown', (e) => {
   if ((e.key === 'ArrowRight' || e.key === ' ') && world && body.dataset.view === 'section' && document.activeElement === document.body) {
     if (e.key === ' ') e.preventDefault();
     world.next();
+  }
+  const directions = {
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+  };
+  if (directions[e.key] && world && body.dataset.view === 'explore' && !menu.classList.contains('is-open')) {
+    const target = e.target;
+    const typing = target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+    if (!typing) {
+      e.preventDefault();
+      const now = performance.now();
+      if (!e.repeat || now - lastKeyWalkAt > 380) {
+        lastKeyWalkAt = now;
+        world.moveByScreenDirection(...directions[e.key]);
+      }
+    }
   }
 });
 
