@@ -104,6 +104,7 @@
       <li><a href="#panel-crop" data-go="crop">CropIndia AI</a></li>
       <li><a href="#panel-education" data-go="education">Education</a></li>
       <li><a href="#panel-contact" data-go="contact">Contact</a></li>
+      <li><a href="murarikumarcv.pdf" download="murarikumarcv.pdf" id="menu-cv" class="menu-cv">Download CV</a></li>
     </ul>
   </nav>
 
@@ -120,6 +121,25 @@
 
     <!-- 3D hotspot labels are created by main.js from config.js -->
     <div id="hotspots" class="hotspots"></div>
+    <!-- Fixed caption + typing box: everything people say appears here, never on top of them. -->
+    <section id="dock" class="dock" aria-live="polite" hidden>
+      <div class="dock-card" id="dock-card">
+        <p class="dock-title" id="dock-title"></p>
+        <p class="dock-text" id="dock-text"></p>
+        <p class="dock-you" id="dock-you" hidden></p>
+      </div>
+      <form id="dock-form" class="dock-form" autocomplete="off" hidden>
+        <label class="sr-only" for="dock-input">Type here</label>
+        <input id="dock-input" type="text" maxlength="300" placeholder="Type here…" enterkeyhint="send">
+        <button type="submit" class="btn btn-primary" id="dock-send">Send</button>
+      </form>
+      <div class="dock-actions">
+        <button type="button" class="btn btn-ghost" id="btn-leave" hidden>Leave office</button>
+        <button type="button" class="btn btn-ghost" id="btn-revisit" hidden>Walk in again</button>
+      </div>
+    </section>
+    <button type="button" class="chip-btn details-pill" id="btn-details" hidden>Show details</button>
+
     <p id="hint" class="hint">Drag to look around, scroll or pinch to zoom, and tap a glowing marker to open it.</p>
 
     <!-- ============================ PANELS ============================ -->

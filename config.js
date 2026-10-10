@@ -15,11 +15,12 @@
 
    HOW TO VISIT A COMPANY
      1. Click the company marker (Astropulse SMM, HealthGIS or Nexora AI).
-        The roof lifts off, so you see the cabins and the people inside.
-     2. DOUBLE-CLICK (or double-tap) on empty space (not on a button or the
-        panel). The camera moves to the first person, who introduces
-        themselves. Double-click again to move to the next person.
-        After the last person the camera returns to the whole office.
+        The gate and door open, the roof lifts off and a visitor walks in.
+     2. At reception, type your name. The receptionist then walks you past
+        every cabin and into the FOUNDER'S OFFICE, where you can ask
+        Murari anything (answers come from Groq AI, see config.ai below).
+     3. Press "Leave office" to finish. Afterwards you can DOUBLE-CLICK on
+        empty space to meet the team one by one.
    ===================================================================== */
 
 export const CONFIG = {
@@ -35,6 +36,33 @@ export const CONFIG = {
     cropRepo: '',
     astropulseLive: 'https://astropulsesmm.vercel.app',
     healthgisLive: '',
+  },
+
+  /* ---- AI chat (Groq, called straight from the browser: no backend) ----
+     1. Create a key at https://console.groq.com/keys and paste it below.
+     2. WARNING: anything in a front-end file can be read by every visitor.
+        Use a key that is only for this site, watch its usage in the Groq
+        console and rotate it if it is abused.
+     3. model: Groq retired llama-3.3-70b-versatile on 16 Aug 2026, so the
+        site uses openai/gpt-oss-120b. If it is ever removed, the site
+        tries the fallback models in order. Check the live list at
+        https://console.groq.com/docs/models                              */
+  ai: {
+    apiKey: '',
+    model: 'openai/gpt-oss-120b',
+    fallbackModels: ['openai/gpt-oss-20b', 'qwen/qwen3.6-27b'],
+    maxAnswerTokens: 420,
+    // Facts the AI may use when it answers AS Murari. Edit freely.
+    knowledge: [
+      'Name: Murari Kumar. Diploma Computer Science and Engineering student at Centurion University, graduating in 2027.',
+      'Builds for the web (HTML, CSS, JavaScript, React), Android (Java) and AI-powered products. Also knows Python, C++, Firebase, DBMS, REST APIs, Git and GitHub.',
+      'Featured project: Nexora AI, an AI website builder where you describe your idea and get a website you can publish online in minutes. Live at https://nexora-ai-webbuilder.vercel.app/',
+      'Works with Astropulse SMM, a social media marketing company with a team of nine (content, design, ad campaigns, client reporting). Live at https://astropulsesmm.vercel.app',
+      'HealthGIS: a concept that puts health information on interactive maps so patterns by area are easy to see.',
+      'CropIndia AI: a concept for crop production information and visualization.',
+      'Contact: email murarikumarstm102@gmail.com, GitHub https://github.com/developer8709-max',
+      'Looking for chances to work with other developers, learn from real projects and build products that help people.',
+    ].join('\n'),
   },
 
   text: {
@@ -134,7 +162,7 @@ export const CONFIG = {
 
   views: {
     home:      { position: [20, 12, 30],  target: [0, 2, 6] },
-    explore:   { position: [22, 26, 38],  target: [0, 1, 9] },
+    explore:   { position: [22, 26, 38],  target: [0, 1, 6] },
     education: { position: [-4.4, 4.4, 5.4], target: [-9.4, 1.0, -1.2] },
   },
 
@@ -166,16 +194,16 @@ export const CONFIG = {
       label: 'Nexora AI',
       preview: 'Featured project: an AI website builder that helps you publish online.',
       color: '#8f7fe6',
-      position: [24.0, 6.0, -5.2],
-      camera: { position: [27.0, 4.8, 6.5], target: [24.0, 0.9, -4.6] },
+      position: [24.0, 8.4, -5.2],
+      camera: { position: [28.2, 6.6, 12.0], target: [24.0, 1.0, -3.6] },
     },
     {
       id: 'healthgis',
       label: 'HealthGIS',
       preview: 'Health information on interactive maps. Visit the team inside.',
       color: '#1fbf8f',
-      position: [-15.5, 6.0, 6.3],
-      camera: { position: [-12.5, 4.8, 18.0], target: [-15.5, 0.9, 6.9] },
+      position: [-15.5, 8.4, 6.3],
+      camera: { position: [-11.3, 6.6, 23.6], target: [-15.5, 1.0, 7.3] },
     },
     {
       id: 'crop',
@@ -190,8 +218,8 @@ export const CONFIG = {
       label: 'Astropulse SMM',
       preview: 'A social media marketing office with a team of nine, in the city.',
       color: '#ff4fa3',
-      position: [-6.0, 6.0, 16.8],
-      camera: { position: [-3.0, 4.8, 28.5], target: [-6.0, 0.9, 17.4] },
+      position: [-6.0, 8.4, 16.8],
+      camera: { position: [-1.8, 6.6, 34.0], target: [-6.0, 1.0, 17.8] },
     },
     {
       id: 'contact',

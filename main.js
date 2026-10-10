@@ -15,6 +15,7 @@ window.__portfolioStarted = true;
 import { CONFIG } from './config.js';
 import { SoundEngine } from './audio.js';
 import { createWorld } from './world.js';
+import { MurariChat } from './chat.js';
 
 const $ = (id) => document.getElementById(id);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -139,6 +140,10 @@ async function boot() {
       onHotspotClick: (id) => openSection(id),
       onFrame: updateLabels,
       onUserInteract: () => hideHint(),
+      onSpeak: (m) => { btnRevisit.hidden = true; setCaption(m.title, m.text, m.accent); },
+      onSpeakEnd: () => { if (inputMode === 'off') hideDock(); },
+      onInput: onInputMessage,
+      onVisitState: onVisitState,
       onWarning: (msg) => toast(msg),
       onError: (err) => {
         console.error(err);
@@ -222,6 +227,104 @@ function setLabelHover(id) {
   labels.forEach((el, key) => { el.classList.toggle('is-hover', key === id); if (key === id) el.style.zIndex = '9999'; });
 }
 
+
+/* ------------------------------------------------------------------ */
+/* 3b. the FIXED caption dock + typing box + Groq chat                  */
+/*     Everything people say appears here (never on top of them).       */
+/* ------------------------------------------------------------------ */
+const chat = new MurariChat(CONFIG);
+const dock = $('dock'), dockCard = $('dock-card'), dockTitle = $('dock-title'), dockText = $('dock-text'), dockYou = $('dock-you');
+const dockForm = $('dock-form'), dockInput = $('dock-input'), dockSend = $('dock-send');
+const btnLeave = $('btn-leave'), btnRevisit = $('btn-revisit'), btnDetails = $('btn-details');
+const COMPANY_IDS = ['astropulse', 'nexora', 'healthgis'];
+const COMPANY_NAMES = { astropulse: 'Astropulse SMM', nexora: 'Nexora AI', healthgis: 'HealthGIS' };
+let inputMode = 'off', chatCtx = {}, chatToken = 0, chatBusy = false, visitState = 'ended', panelUserHidden = false;
+
+function setCaption(title, text, accent, thinking) {
+  dock.hidden = false;
+  dockCard.style.setProperty('--acc', accent || '#ff6b5e');
+  dockTitle.textContent = title || '';
+  dockText.textContent = text || '';
+  dockText.classList.toggle('is-thinking', !!thinking);
+  dockCard.scrollTop = 0;
+}
+function hideDock() {
+  dock.hidden = true; dockForm.hidden = true; dockYou.hidden = true; btnRevisit.hidden = true; btnLeave.hidden = true;
+}
+function sectionAccent() {
+  const h = (CONFIG.hotspots || []).find((x) => x.id === currentView);
+  return (h && h.color) || '#ff6b5e';
+}
+function chatTitle() { return chatCtx.who === 'murari' ? (CONFIG.name || 'Murari Kumar') + ' · Founder' : (CONFIG.name || 'Murari Kumar'); }
+
+function onInputMessage(msg) {
+  chatToken++; chatBusy = false;
+  inputMode = msg.mode; chatCtx = msg;
+  if (msg.mode === 'off') { dockForm.hidden = true; dockYou.hidden = true; dockYou.textContent = ''; return; }
+  dock.hidden = false; dockForm.hidden = false; dockYou.hidden = true;
+  dockInput.disabled = false; dockSend.disabled = false; dockInput.value = '';
+  dockInput.placeholder = msg.placeholder || 'Type here…';
+  dockSend.textContent = msg.mode === 'name' ? 'Enter' : 'Send';
+  if (msg.mode !== 'chat') chat.reset();
+  if (msg.mode === 'name' || msg.who === 'murari') setTimeout(() => { try { dockInput.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }, 60);
+}
+
+dockInput.addEventListener('focus', () => { if (chatCtx.who === 'about' && world) world.setAboutPaused(true); });   // stop the greeting loop while you type
+dockForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = dockInput.value.trim();
+  if (!text || !world) return;
+  if (inputMode === 'name') { dockInput.value = ''; world.submitName(text); return; }
+  if (inputMode !== 'chat' || chatBusy) return;
+  const token = ++chatToken; chatBusy = true;
+  if (chatCtx.who === 'about') world.setAboutPaused(true);
+  dockInput.value = ''; dockInput.disabled = true; dockSend.disabled = true;
+  dockYou.hidden = false; dockYou.textContent = 'You: ' + text;
+  const accent = sectionAccent();
+  setCaption(chatTitle(), 'Thinking…', accent, true);
+  const place = chatCtx.who === 'murari' ? 'office' : 'about';
+  const answer = await chat.ask(text, { place, visitor: chatCtx.name, company: COMPANY_NAMES[currentView] });
+  if (token !== chatToken) return;                       // the visit ended or the section changed meanwhile
+  chatBusy = false;
+  setCaption(chatTitle(), answer, accent);
+  dockInput.disabled = false; dockSend.disabled = false;
+  try { dockInput.focus({ preventScroll: true }); } catch (err) { /* ignore */ }
+});
+
+function onVisitState(state) {
+  visitState = state;
+  btnLeave.hidden = !(state === 'walking' || state === 'chat');
+  if (state === 'walking') { setPanelHidden(true); toast('A visitor is walking in. Type your name at reception!', 5200); }
+}
+btnLeave.addEventListener('click', () => {
+  if (!world) return;
+  const accent = sectionAccent();
+  world.endVisit();
+  setCaption('Office visit finished', 'You left the founder\'s office. Double-click empty space to meet the team one by one, or walk in again.', accent);
+  btnLeave.hidden = true; btnRevisit.hidden = false;
+});
+btnRevisit.addEventListener('click', () => { btnRevisit.hidden = true; if (world) world.startVisit(); });
+
+/* panels: a Hide button + a "Show details" pill, so text never has to cover the scene */
+function updatePanelUi() {
+  const open = $$('.panel.is-open').length > 0, shown = open && !panelUserHidden;
+  body.classList.toggle('panel-open', shown);
+  btnDetails.hidden = !(open && panelUserHidden);
+  if (world) world.setViewShift(shown && !isNarrow() ? 0.13 : 0, shown && isNarrow() ? 0.17 : 0, 0.9);
+}
+function setPanelHidden(on) {
+  panelUserHidden = on;
+  $$('.panel').forEach((p) => p.classList.toggle('is-hidden-by-user', on && p.classList.contains('is-open')));
+  updatePanelUi();
+}
+$$('.panel-bar').forEach((bar) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'chip-btn panel-hide'; b.textContent = 'Hide'; b.setAttribute('aria-label', 'Hide these details so the scene is fully visible');
+  b.addEventListener('click', () => setPanelHidden(true));
+  bar.insertBefore(b, bar.firstChild);
+});
+btnDetails.addEventListener('click', () => setPanelHidden(false));
+
 /* ------------------------------------------------------------------ */
 /* 4. views, panels, menu                                              */
 /* ------------------------------------------------------------------ */
@@ -242,7 +345,8 @@ function setView(view) {
 
 function closePanels() {
   $$('.panel.is-open').forEach((p) => p.classList.remove('is-open'));
-  if (world) world.setViewShift(0, 0, 0.9);
+  $$('.panel.is-hidden-by-user').forEach((p) => p.classList.remove('is-hidden-by-user'));
+  panelUserHidden = false; updatePanelUi();
 }
 
 // On the home screen the text sits on the left (desktop) or bottom (phone), so slide the world the other way.
@@ -264,9 +368,9 @@ function goExplore() {
 
 const TOUR_TIPS = {
   about: 'Double-click empty space to hear the next sentence.',
-  astropulse: 'Double-click empty space to meet the team, one by one.',
-  nexora: 'Double-click empty space to meet the team, one by one.',
-  healthgis: 'Double-click empty space to meet the team, one by one.',
+  astropulse: 'Type your name at reception: the receptionist will walk you through the office.',
+  nexora: 'Type your name at reception: the receptionist will walk you through the office.',
+  healthgis: 'Type your name at reception: the receptionist will walk you through the office.',
 };
 const tipsShown = new Set();
 
@@ -279,12 +383,13 @@ function openSection(id) {
   world.setAutoRotate(false);
   world.flyTo(id);
   $$('.panel.is-open').forEach((p) => { if (p !== panel) p.classList.remove('is-open'); });
+  $$('.panel.is-hidden-by-user').forEach((p) => p.classList.remove('is-hidden-by-user'));
+  panelUserHidden = false;
   if (panel) {
     panel.classList.add('is-open');
     panel.scrollTop = 0;
     setTimeout(() => { try { panel.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }, 450);
-    // keep the scene visible beside (desktop) or above (phone) the panel
-    world.setViewShift(isNarrow() ? 0 : 0.13, isNarrow() ? 0.17 : 0, 1.2);
+    updatePanelUi();       // keeps the scene visible beside (desktop) or above (phone) the panel
   }
   sound.whoosh(); sound.open();
   if (TOUR_TIPS[id] && !tipsShown.has(id)) { tipsShown.add(id); setTimeout(() => toast(TOUR_TIPS[id], 5200), 2200); }

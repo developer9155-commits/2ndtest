@@ -441,3 +441,53 @@ body:not(.mode-3d) .chips li { animation: none; }
   *, *::before, *::after { animation: none !important; transition-duration: 0.01ms !important; transition-delay: 0s !important; }
   body.mode-3d .reveal { opacity: 1; transform: none; }
 }
+
+
+/* ------------------------------ 10. fixed caption dock, details pill, CV link ------------------------------ */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.menu a.menu-cv { margin-top: 6px; border-top: 2px dashed rgba(36, 31, 77, 0.16); font-weight: 800; color: var(--violet); }
+
+/* The dock never covers the people: desktop = bottom-left (the panel is on the right), phone = top. */
+.dock { display: none; }
+body.mode-3d .dock:not([hidden]) {
+  display: flex; flex-direction: column; gap: 8px; position: fixed; z-index: 18;
+  left: 20px; bottom: calc(20px + var(--safe-b)); width: min(560px, calc(100vw - 40px));
+  max-height: 46vh; pointer-events: none;
+}
+body.mode-3d.panel-open .dock:not([hidden]) { width: min(560px, calc(100vw - 600px)); min-width: 320px; }
+.dock > * { pointer-events: auto; }
+.dock-card {
+  --acc: var(--coral); background: rgba(255, 253, 248, 0.97); border: 3px solid var(--acc); border-radius: 22px;
+  padding: 12px 18px 14px; box-shadow: var(--shadow); overflow-y: auto; max-height: 30vh;
+}
+.dock-title { margin: 0 0 4px; font-weight: 800; font-size: 0.98rem; color: var(--acc); letter-spacing: -0.01em; }
+.dock-text { margin: 0; font-size: 1.04rem; line-height: 1.45; font-weight: 500; color: var(--ink); white-space: pre-wrap; }
+.dock-text.is-thinking { color: var(--ink-soft); font-style: italic; }
+.dock-you { margin: 8px 0 0; padding-top: 8px; border-top: 2px dashed rgba(36, 31, 77, 0.14); font-size: 0.9rem; color: var(--ink-soft); }
+.dock-form { display: flex; gap: 8px; }
+.dock-form input {
+  flex: 1; min-width: 0; height: 50px; padding: 0 18px; border-radius: 999px; border: 3px solid var(--ink);
+  background: #fff; font: inherit; font-size: 1.02rem; color: var(--ink); box-shadow: var(--shadow);
+}
+.dock-form input:focus { outline: 3px solid rgba(79, 155, 255, 0.55); outline-offset: 2px; }
+.dock-form input:disabled { opacity: 0.6; }
+.dock-form .btn { height: 50px; padding: 0 22px; }
+.dock-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.dock-actions .btn { height: 40px; padding: 0 16px; background: var(--cream); box-shadow: var(--shadow); }
+.dock-actions[hidden], .dock-actions:empty { display: none; }
+
+.details-pill { display: none; }
+body.mode-3d .details-pill:not([hidden]) { display: inline-flex; position: fixed; z-index: 16; right: 20px; top: calc(76px + var(--safe-t)); background: var(--cream); box-shadow: var(--shadow); }
+body.mode-3d .panel.is-hidden-by-user { opacity: 0; visibility: hidden; transform: translateX(28px); pointer-events: none; }
+body.mode-3d .panel-bar { display: flex; justify-content: flex-end; gap: 8px; }
+body.mode-3d .panel-bar .panel-hide { margin-right: 6px; }
+
+@media (max-width: 760px) {
+  body.mode-3d .dock:not([hidden]), body.mode-3d.panel-open .dock:not([hidden]) {
+    top: calc(64px + var(--safe-t)); bottom: auto; left: 10px; right: 10px; width: auto; min-width: 0; max-height: 44vh;
+  }
+  .dock-card { max-height: 24vh; padding: 10px 14px 12px; }
+  .dock-text { font-size: 0.95rem; }
+  .dock-form input { height: 46px; } .dock-form .btn { height: 46px; padding: 0 16px; }
+  body.mode-3d .details-pill:not([hidden]) { right: 12px; top: auto; bottom: calc(12px + var(--safe-b)); }
+}

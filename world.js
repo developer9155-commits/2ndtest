@@ -33,11 +33,12 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 /* ------------------------------------------------------------------ */
 const WORLD_SCALE = 1.5;     // how much bigger everything is (1 = original size)
 const CAMERA_SCALE = 1.6;    // how far back the HOME camera sits
-const EXPLORE_SCALE = 2.1;   // how far back the EXPLORE camera sits (sees the whole island)
-const ISLAND_RADIUS = 46;    // centre-to-edge size of the island
+const EXPLORE_SCALE = 2.75;   // how far back the EXPLORE camera sits (sees the whole island)
+const ISLAND_RADIUS = 66;    // centre-to-edge size of the island (was 46: the new outer ring is the forest)
+const OLD_RADIUS = 46;       // the original island: old scenery is still scattered inside this circle
 const TRACK_R = 44;          // radius of the circular railway track
 const STATION_A = 1.0;       // where the station is on the ring (radians)
-const OFFICE_SCALE = 0.72;   // how big the project offices are (1 = original)
+const OFFICE_SCALE = 1.0;    // how big the project offices are (1 = original, was 0.72)
 
 /* ------------------------------------------------------------------ */
 /* 0. helpers                                                          */
@@ -145,10 +146,12 @@ export async function createWorld(opts) {
     canvas, config, quality = 'full', reducedMotion = false,
     onProgress = () => {}, onHotspotHover = () => {}, onHotspotClick = () => {},
     onFrame = () => {}, onUserInteract = () => {}, onWarning = () => {}, onError = () => {},
+    onSpeak = () => {}, onSpeakEnd = () => {}, onInput = () => {}, onVisitState = () => {},
   } = opts;
 
   const S = WORLD_SCALE;
   const R = ISLAND_RADIUS;
+  const R0 = OLD_RADIUS;
   const simple = quality === 'simple';
   const small = window.matchMedia('(max-width: 760px)').matches;
   const animate = !reducedMotion;
@@ -353,6 +356,8 @@ export async function createWorld(opts) {
     // the outer mountain ring
     [28, -24, 4.6, 6.5], [-30, -22, 5.0, 7], [36, -10, 3.6, 5.5], [-8, -33, 4.6, 6.5], [8, -34, 4.0, 6],
     [-18, -30, 3.8, 6], [20, -31, 3.6, 6],
+    // rolling forest hills in the new outer ring
+    [55, 12, 3.2, 8], [-54, 14, 3.0, 8], [50, -32, 3.6, 8], [-50, -34, 3.4, 8], [12, 58, 3.0, 8], [-30, 55, 2.8, 8], [38, 46, 3.2, 8], [-52, -8, 3.4, 7], [30, -52, 3.4, 8], [-10, -55, 3.0, 8],
   ];
   // Flat zones: the old Nexora tower zone is gone (open land now).
   const ZONES = [
@@ -407,6 +412,7 @@ export async function createWorld(opts) {
     return roadDist(x, z) > 1.5 + margin;
   }
 
+  const FOREST_FLOOR = new THREE.Color('#3f8f5e');
   const STOPS = [[0, '#7bd88f'], [0.7, '#62c4a0'], [1.5, '#7d74d8'], [3, '#6a55c8'], [4.8, '#4b3fa6'], [6.2, '#7c6be0'], [7.6, '#c9bfff'], [9.5, '#f0ecff']]
     .map(([h, c]) => [h, new THREE.Color(c)]);
   function terrainColor(h, rnd, out) {
@@ -420,7 +426,7 @@ export async function createWorld(opts) {
 
   let terrain;
   await stage(0.08, 'Raising the island', () => {
-    const RINGS = simple ? 30 : 58, SEG = simple ? 72 : 144;
+    const RINGS = simple ? 40 : 84, SEG = simple ? 90 : 176;
     const grid = [];
     for (let i = 0; i <= RINGS; i++) {
       const row = [], r = (R * i) / RINGS;
@@ -448,6 +454,8 @@ export async function createWorld(opts) {
     tris.forEach((t, n) => {
       const avg = (t[0][1] + t[1][1] + t[2][1]) / 3;
       terrainColor(avg, hash3(t[0][0] * 7, avg * 5, t[0][2] * 7), c);
+      const crad = Math.hypot((t[0][0] + t[1][0] + t[2][0]) / 3, (t[0][2] + t[1][2] + t[2][2]) / 3);
+      c.lerp(FOREST_FLOOR, 0.78 * smoothstep(TRACK_R + 1.5, TRACK_R + 7, crad) * (avg < 3.6 ? 1 : 0.35));   // darker, mossy ground under the forest
       for (let k = 0; k < 3; k++) { pos.set(t[k], n * 9 + k * 3); c.toArray(col, n * 9 + k * 3); }
     });
     const g = new THREE.BufferGeometry();
@@ -464,7 +472,7 @@ export async function createWorld(opts) {
     const lip = new THREE.Mesh(new THREE.TorusGeometry(R - 0.02, 0.1, 6, SEG), mat('#6fd08a'));
     lip.rotation.x = Math.PI / 2; lip.position.y = 0.01; W.add(lip);
 
-    const rockH = 22, top = rockH / 2;
+    const rockH = 22 * (R / 46), top = rockH / 2;
     const rockGeo = new THREE.ConeGeometry(R * 0.94, rockH, simple ? 22 : 40, 6, true);
     const rp = rockGeo.attributes.position;
     for (let i = 0; i < rp.count; i++) {
@@ -529,7 +537,7 @@ export async function createWorld(opts) {
 
     const target = simple ? 130 : small ? 240 : 420;
     for (let tries = 0; tries < 16000 && treeData.length < target; tries++) {
-      const rr = Math.sqrt(rng()) * (R - 2.2), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a);
+      const rr = Math.sqrt(rng()) * (R0 - 2.2), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a);
       if (vnoise(x * 0.28 + 3, z * 0.28) < 0.38 && rng() < 0.85) continue;
       const h = terrainH(x, z);
       if (h > 5.3 || !isClear(x, z, 0.9)) continue;
@@ -566,7 +574,7 @@ export async function createWorld(opts) {
     const blossoms = [];
     const want = simple ? 12 : 46;
     for (let tries = 0; tries < 5000 && blossoms.length < want; tries++) {
-      const rr = Math.sqrt(rng()) * (R - 3), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
+      const rr = Math.sqrt(rng()) * (R0 - 3), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
       if (h > 1.2 || !isClear(x, z, 1.3)) continue;
       if (treeData.some((t) => (t.x - x) ** 2 + (t.z - z) ** 2 < 2.2)) continue;
       if (blossoms.some((t) => (t.x - x) ** 2 + (t.z - z) ** 2 < 4)) continue;
@@ -582,7 +590,7 @@ export async function createWorld(opts) {
 
     const bushes = [];
     for (let tries = 0; tries < 5000 && bushes.length < (simple ? 45 : 160); tries++) {
-      const rr = Math.sqrt(rng()) * (R - 2), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
+      const rr = Math.sqrt(rng()) * (R0 - 2), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
       if (h > 2.6 || !isClear(x, z, 0.5)) continue;
       bushes.push({ x, y: h, z, s: 0.5 + rng() * 0.6 });
     }
@@ -598,7 +606,7 @@ export async function createWorld(opts) {
   await stage(0.32, 'Scattering rocks and flowers', () => {
     const rocks = [];
     for (let tries = 0; tries < 2500 && rocks.length < (simple ? 26 : 70); tries++) {
-      const rr = Math.sqrt(rng()) * (R - 1.5), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
+      const rr = Math.sqrt(rng()) * (R0 - 1.5), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
       if (h > 6.5 || !isClear(x, z, 0.7)) continue;
       rocks.push({ x, y: h, z, s: 0.25 + rng() * 0.45, ry: rng() * TAU });
     }
@@ -612,7 +620,7 @@ export async function createWorld(opts) {
 
     const flowers = [];
     for (let tries = 0; tries < 5000 && flowers.length < (simple ? 90 : 360); tries++) {
-      const rr = Math.sqrt(rng()) * (R - 1.5), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
+      const rr = Math.sqrt(rng()) * (R0 - 1.5), a = rng() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
       if (h > 0.6 || !isClear(x, z, 0.3)) continue;
       flowers.push({ x, y: h, z, s: 0.8 + rng() * 0.6 });
     }
@@ -646,6 +654,131 @@ export async function createWorld(opts) {
       ripples.forEach((r) => { const k = (t * 0.28 + r.off) % 1; r.m.scale.setScalar(0.15 + k * 0.95); r.m.material.opacity = (1 - k) * 0.5; });
     });
   });
+  /* ---------------------------------------------------------------- */
+  /* 4.5 the forest: the new outer ring of the island                  */
+  /*     pine, fir, oak, birch, cherry and maple trees, grass tufts,   */
+  /*     ferns, bushes, mushrooms, logs, stumps and mossy boulders.     */
+  /* ---------------------------------------------------------------- */
+  await stage(0.34, 'Growing the forest', () => {
+    const FR0 = TRACK_R + 2.8, FR1 = R - 1.8;                  // the forest ring (beyond the railway)
+    const frand = mulberry32(777001);
+    const part = (g, hex) => paintGeo(g.index ? g.toNonIndexed() : g, hex);
+    const blob = (r, x, y, z, hex, det = 0) => part(new THREE.IcosahedronGeometry(r, det).translate(x, y, z), hex);
+    const trunk = (rt, rb, h, hex) => part(new THREE.CylinderGeometry(rt, rb, h, 6).translate(0, h / 2, 0), hex);
+    const tier = (r, h, y, hex) => part(new THREE.ConeGeometry(r, h, 7).translate(0, y, 0), hex);
+
+    const TYPES = {
+      pine: mergeGeometries([trunk(0.07, 0.1, 0.6, '#7a5238'), tier(0.62, 0.95, 1.0, '#2b8a6a'), tier(0.5, 0.9, 1.5, '#33a07a'), tier(0.38, 0.85, 1.95, '#3cb287'), tier(0.25, 0.7, 2.38, '#49c795')]),
+      fir: mergeGeometries([trunk(0.06, 0.09, 0.5, '#6a4630'), tier(0.55, 0.9, 0.9, '#1f7a5c'), tier(0.46, 0.85, 1.38, '#278a68'), tier(0.37, 0.8, 1.84, '#2f9c76'), tier(0.28, 0.75, 2.26, '#38ae85'), tier(0.17, 0.6, 2.64, '#46c093')]),
+      oak: mergeGeometries([trunk(0.09, 0.14, 0.95, '#80583c'), blob(0.66, 0, 1.4, 0, '#3f9e5a', 1), blob(0.46, 0.42, 1.18, 0.16, '#4fae6a'), blob(0.48, -0.4, 1.22, -0.12, '#2f8a52'), blob(0.4, 0.04, 1.85, 0.06, '#5cc47c')]),
+      birch: mergeGeometries([trunk(0.045, 0.065, 1.5, '#efe9dc'), blob(0.4, 0, 1.55, 0, '#a6d86a', 1), blob(0.3, 0.22, 1.32, 0.1, '#8cc95a'), blob(0.28, -0.2, 1.8, -0.06, '#b9e37a')]),
+      cherry: mergeGeometries([trunk(0.07, 0.11, 0.8, '#7a5238'), blob(0.58, 0, 1.2, 0, '#ffb3c7', 1), blob(0.4, 0.38, 1.0, 0.14, '#ff9fbd'), blob(0.4, -0.34, 1.05, -0.1, '#ffc9d8'), blob(0.32, 0.02, 1.62, 0.04, '#ffa6c4')]),
+      maple: mergeGeometries([trunk(0.08, 0.12, 0.85, '#7a5238'), blob(0.6, 0, 1.3, 0, '#f08a3c', 1), blob(0.42, 0.4, 1.1, 0.15, '#e8b23a'), blob(0.44, -0.38, 1.15, -0.1, '#d9573a'), blob(0.34, 0.04, 1.72, 0.05, '#f5a64d')]),
+    };
+    const bucket = {}; Object.keys(TYPES).forEach((k) => { bucket[k] = []; });
+    const cell = 1.7, grid = new Map();
+    const taken = (x, z) => {
+      const cx = Math.floor(x / cell), cz = Math.floor(z / cell);
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+        const list = grid.get((cx + i) + ',' + (cz + j)); if (!list) continue;
+        for (const p of list) if ((p[0] - x) ** 2 + (p[1] - z) ** 2 < cell * cell * 0.62) return true;
+      }
+      return false;
+    };
+    const mark = (x, z) => { const k = Math.floor(x / cell) + ',' + Math.floor(z / cell); (grid.get(k) || grid.set(k, []).get(k)).push([x, z]); };
+
+    const want = simple ? 260 : small ? 620 : 1250;
+    for (let tries = 0; tries < 40000 && Object.values(bucket).reduce((n, b) => n + b.length, 0) < want; tries++) {
+      const rr = Math.sqrt(FR0 * FR0 + frand() * (FR1 * FR1 - FR0 * FR0)), a = frand() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a);
+      const meadow = vnoise(x * 0.07 + 40, z * 0.07 + 7);
+      if (meadow < 0.2) continue;                                              // open clearings
+      const h = terrainH(x, z);
+      if (h > 5.2 || taken(x, z)) continue;
+      const g = vnoise(x * 0.06, z * 0.06 + 90);                               // which kind of woodland is here
+      const pick = frand();
+      let type;
+      if (g < 0.3) type = pick < 0.55 ? 'fir' : 'pine';
+      else if (g < 0.55) type = pick < 0.5 ? 'oak' : pick < 0.8 ? 'pine' : 'birch';
+      else if (g < 0.75) type = pick < 0.45 ? 'birch' : pick < 0.75 ? 'oak' : 'cherry';
+      else type = pick < 0.5 ? 'maple' : pick < 0.8 ? 'cherry' : 'oak';
+      bucket[type].push({ x, y: h - 0.04, z, s: (0.85 + frand() * 0.9) * (1 - h / 20), ry: frand() * TAU });
+      mark(x, z);
+    }
+    const dummy = new THREE.Object3D(), tint = new THREE.Color();
+    const forestMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    Object.keys(bucket).forEach((k) => {
+      const list = bucket[k]; if (!list.length) return;
+      const im = new THREE.InstancedMesh(TYPES[k], forestMat, list.length);
+      list.forEach((t, i) => {
+        dummy.position.set(t.x, t.y, t.z); dummy.rotation.set(0, t.ry, 0); dummy.scale.set(t.s, t.s * (0.9 + (i % 5) * 0.06), t.s); dummy.updateMatrix();
+        im.setMatrixAt(i, dummy.matrix);
+        const b = 0.82 + frand() * 0.34; im.setColorAt(i, tint.setRGB(b, b * (0.96 + frand() * 0.08), b));
+      });
+      im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false; W.add(im);
+    });
+
+    // bushes, boulders, logs, stumps, mushrooms, ferns
+    const scatter = (count, tries, hMax, margin, fn) => {
+      const out = [];
+      for (let i = 0; i < tries && out.length < count; i++) {
+        const rr = Math.sqrt(FR0 * FR0 + frand() * (FR1 * FR1 - FR0 * FR0)), a = frand() * TAU, x = rr * Math.cos(a), z = rr * Math.sin(a), h = terrainH(x, z);
+        if (h > hMax) continue;
+        out.push(fn(x, h, z));
+      }
+      return out;
+    };
+    const place = (mesh, items, setup) => {
+      items.forEach((it, i) => { dummy.position.set(it.x, it.y, it.z); dummy.rotation.set(it.rx || 0, it.ry || 0, it.rz || 0); dummy.scale.set(it.sx || it.s, it.sy || it.s, it.sz || it.s); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); if (setup) setup(mesh, i, it); });
+      mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false; W.add(mesh);
+    };
+
+    const bushes = scatter(simple ? 60 : 320, 3000, 4, 0, (x, h, z) => ({ x, y: h + 0.1, z, s: 0.5 + frand() * 0.7, ry: frand() * TAU }));
+    const bushCols = ['#2f8a52', '#3f9e5a', '#4fae6a', '#2b7a4c'].map((c) => new THREE.Color(c));
+    place(new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.42, 1), new THREE.MeshLambertMaterial({ flatShading: true }), bushes.length), bushes, (m, i) => m.setColorAt(i, bushCols[i % 4]));
+
+    const boulders = scatter(simple ? 24 : 110, 1500, 5, 0, (x, h, z) => ({ x, y: h + 0.05, z, sx: 0.5 + frand() * 0.8, sy: 0.4 + frand() * 0.5, sz: 0.5 + frand() * 0.8, ry: frand() * TAU, rx: frand() * 0.5 }));
+    const rockCols = ['#7f8f84', '#8fa093', '#6a7a70', '#9aa89c'].map((c) => new THREE.Color(c));
+    place(new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.6, 0), new THREE.MeshLambertMaterial({ flatShading: true }), boulders.length), boulders, (m, i) => m.setColorAt(i, rockCols[i % 4]));
+
+    const logs = scatter(simple ? 8 : 34, 800, 4, 0, (x, h, z) => ({ x, y: h + 0.14, z, s: 0.8 + frand() * 0.5, ry: frand() * TAU, rz: Math.PI / 2 }));
+    place(new THREE.InstancedMesh(new THREE.CylinderGeometry(0.13, 0.15, 1.5, 7), new THREE.MeshLambertMaterial({ color: '#7a5238', flatShading: true }), logs.length), logs);
+    const stumps = scatter(simple ? 8 : 30, 800, 4, 0, (x, h, z) => ({ x, y: h + 0.13, z, s: 0.7 + frand() * 0.6 }));
+    place(new THREE.InstancedMesh(new THREE.CylinderGeometry(0.16, 0.2, 0.28, 8), new THREE.MeshLambertMaterial({ color: '#9a6e4a', flatShading: true }), stumps.length), stumps);
+
+    const shrooms = scatter(simple ? 24 : 150, 2000, 3.5, 0, (x, h, z) => ({ x, y: h, z, s: 0.7 + frand() * 0.8, ry: frand() * TAU }));
+    const shroomGeo = mergeGeometries([part(new THREE.CylinderGeometry(0.025, 0.035, 0.14, 6).translate(0, 0.07, 0), '#f5ecd9'), part(new THREE.SphereGeometry(0.1, 8, 5, 0, TAU, 0, Math.PI / 2).translate(0, 0.13, 0), '#e8453c')]);
+    place(new THREE.InstancedMesh(shroomGeo, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }), shrooms.length), shrooms);
+
+    // ferns: flat fans of leaves
+    const ferns = scatter(simple ? 80 : 520, 4000, 4, 0, (x, h, z) => ({ x, y: h + 0.02, z, s: 0.6 + frand() * 0.8, ry: frand() * TAU }));
+    const fernParts = [];
+    for (let k = 0; k < 6; k++) {
+      const leaf = new THREE.ConeGeometry(0.05, 0.5, 3).translate(0, 0.25, 0); leaf.rotateZ(1.05); leaf.rotateY((k / 6) * TAU); fernParts.push(part(leaf, k % 2 ? '#3fae6a' : '#55c27a'));
+    }
+    place(new THREE.InstancedMesh(mergeGeometries(fernParts), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }), ferns.length), ferns);
+
+    // grass tufts: thin blades, dark at the root and bright at the tip
+    const blades = [];
+    const root = new THREE.Color('#2f8a4c'), tip = new THREE.Color('#9be36a'), cc = new THREE.Color();
+    for (let k = 0; k < 7; k++) {
+      const h = 0.26 + (k % 3) * 0.1, a = (k / 7) * TAU, bg = new THREE.ConeGeometry(0.035, h, 3).translate(0, h / 2, 0);
+      bg.rotateZ((k % 2 ? 1 : -1) * (0.12 + (k % 3) * 0.08)); bg.rotateY(a); bg.translate(Math.cos(a) * 0.05, 0, Math.sin(a) * 0.05);
+      const ng = bg.toNonIndexed(), pos = ng.attributes.position, col = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) { cc.copy(root).lerp(tip, clamp(pos.getY(i) / (h * 0.95), 0, 1)); cc.toArray(col, i * 3); }
+      ng.setAttribute('color', new THREE.BufferAttribute(col, 3)); blades.push(ng);
+    }
+    const grassN = simple ? 700 : small ? 2200 : 6500;
+    const tufts = scatter(grassN, grassN * 3, 4.5, 0, (x, h, z) => ({ x, y: h, z, s: 0.8 + frand() * 1.1, ry: frand() * TAU }));
+    const grass = new THREE.InstancedMesh(mergeGeometries(blades), new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), tufts.length);
+    place(grass, tufts, (m, i) => { const b = 0.85 + frand() * 0.3; m.setColorAt(i, tint.setRGB(b, b, b * 0.95)); });
+    grass.castShadow = false;
+
+    // wildflowers in the clearings
+    const flw = scatter(simple ? 80 : 520, 6000, 3, 0, (x, h, z) => ({ x, y: h + 0.22, z, s: 0.7 + frand() * 0.7 }));
+    const flwCols = ['#ffe08a', '#ffffff', '#ff9fb8', '#c9a7ff', '#7ee8ff', '#ff6b5e'].map((c) => new THREE.Color(c));
+    place(new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.07, 0), new THREE.MeshLambertMaterial({ flatShading: true }), flw.length), flw, (m, i) => m.setColorAt(i, flwCols[i % 6]));
+  });
+
 /* ---------------------------------------------------------------- */
   /* makePerson: a small, friendly person with a face                  */
   /* ---------------------------------------------------------------- */
@@ -828,6 +961,7 @@ export async function createWorld(opts) {
     animators.push((dt, t) => { advanceAgent(a, dt, t); applyPose(a, dt, t, false); placeAgent(a, dt); });
     return a;
   }
+  function drive(a, steps) { a.steps = steps.concat([{ wait: Infinity, pose: 'idle' }]); a.i = 0; a.timer = 0; }
   function advanceAgent(a, dt, t) {
     const n = a.steps.length;
     let guard = 0;
@@ -1276,7 +1410,7 @@ export async function createWorld(opts) {
     box(st, 1.0, 0.5, 0.04, -0.2, 0.65, 2.76, '#bfe4ff', { emissive: '#9fd8ff', emissiveIntensity: 0.3 });
     const nameTex = canvasTextureWH(512, 128, (g, w, h) => {
       g.fillStyle = '#241f4d'; g.fillRect(0, 0, w, h); g.fillStyle = '#ffe08a'; g.fillRect(0, h - 10, w, 10);
-      g.fillStyle = '#ffffff'; g.font = '800 54px system-ui, "Segoe UI", Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('ISLAND STATION', w / 2, h / 2 - 4);
+      g.fillStyle = '#ffffff'; g.font = '800 54px system-ui, "Segoe UI", Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('KANHWA STATION', w / 2, h / 2 - 4);
     });
     const nameSign = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.45), new THREE.MeshBasicMaterial({ map: nameTex, fog: false }));
     nameSign.position.set(-0.8, 1.5, 2.2); nameSign.rotation.y = Math.PI; st.add(nameSign);
@@ -1376,7 +1510,8 @@ export async function createWorld(opts) {
     bx(7.4, 1.3, 0.12, 0, 0.8, -3.0, o.wallTint);
     glass(7.3, 1.1, 0.03, 0, 0.75, 0.58);
     glass(0.03, 1.1, 3.5, -3.7, 0.75, -1.2); glass(0.03, 1.1, 3.5, 3.7, 0.75, -1.2);
-    bx(0.9, 1.05, 0.05, 0, 0.7, 0.6, o.accent, { transparent: true, opacity: 0.35, depthWrite: false }).castShadow = false;
+    const mainDoor = bx(0.9, 1.05, 0.05, 0, 0.7, 0.6, o.accent, { transparent: true, opacity: 0.35, depthWrite: false }); mainDoor.castShadow = false;
+    let doorPos = 0;
     for (let i = 0; i < 5; i++) bx(0.16, 1.3, 0.16, -3.65 + i * 1.825, 0.79, 0.58, '#fff8ec');
     bx(7.8, 0.14, 4.0, 0, 1.38, -1.2, '#fff8ec');
     bx(1.4, 0.08, 0.6, 0, 0.04, 0.95, '#d8d2ff');
@@ -1452,7 +1587,7 @@ export async function createWorld(opts) {
     bx(0.9, 0.95, 0.85, 2.45, 0.48, 2.65, '#fff1dc');
     bx(1.1, 0.08, 1.05, 2.45, 1.0, 2.65, o.accent);
     glass(0.03, 0.5, 0.6, 2.0, 0.62, 2.65);
-    [[-3.4, 1.25], [-3.4, 2.45], [3.4, 1.25]].forEach(([x, z], i) => {
+    [[3.9, 2.4], [3.4, 1.25]].forEach(([x, z], i) => {
       bx(0.9, 0.22, 0.5, x, 0.15, z, '#a9714f');
       ball(H, 0.3, x, 0.45, z, '#3fae7a'); ball(H, 0.1, x + 0.2, 0.7, z, ['#ff6b5e', '#ffe08a', '#ff9fb8'][i]);
     });
@@ -1485,9 +1620,12 @@ export async function createWorld(opts) {
     }
 
     animators.push((dt, t) => {
-      gate.pos += (gate.target - gate.pos) * Math.min(1, dt * 2.2);
+      const gateWant = gate.hold ? 1 : gate.target;
+      gate.pos += (gateWant - gate.pos) * Math.min(1, dt * 2.2);
+      doorPos += ((gate.hold ? 1 : 0) - doorPos) * Math.min(1, dt * 2.6);
+      mainDoor.position.x = doorPos * 0.95; mainDoor.material.opacity = 0.35 * (1 - doorPos * 0.5);
       gateL.position.set(-0.5 - 0.95 * gate.pos, 0, 3.32); gateR.position.set(0.5 + 0.95 * gate.pos, 0, 3.32);
-      const open = gate.target > 0.5;
+      const open = gateWant > 0.5;
       lampRed.visible = !open; lampGreen.visible = open;
       lampGlow.material.color.set(open ? 0x5dff9a : 0xff4d4d);
       myMonitors.forEach((m, i) => { m.emissiveIntensity = 0.7 + Math.sin(t * 5 + i * 2) * 0.1 + (Math.sin(t * 17 + i) > 0.92 ? 0.25 : 0); });
@@ -1498,6 +1636,34 @@ export async function createWorld(opts) {
     // the ROOF group: everything above the ground floor. It lifts off while the office is visited.
     const roof = new THREE.Group(); H.add(roof);
     H.children.slice().forEach((c) => { if (c !== roof && (c.isMesh || c.isSprite) && c.position.y >= 1.3) roof.add(c); });
+
+    // ---- the FOUNDER'S OFFICE: a glass room in the front-left of the courtyard (Murari's own office)
+    const fglass = (sx, sy, sz, x, z) => { const m = bx(sx, sy, sz, x, 0.58, z, '#bfe4ff', { transparent: true, opacity: 0.28, depthWrite: false }); m.castShadow = false; return m; };
+    bx(3.0, 0.03, 2.05, -3.1, 0.05, 2.0, '#f3ecff').castShadow = false;
+    fglass(0.04, 1.0, 2.05, -4.6, 2.0); fglass(3.0, 1.0, 0.04, -3.1, 0.98); fglass(3.0, 1.0, 0.04, -3.1, 3.02);
+    fglass(0.04, 1.0, 0.55, -1.6, 1.27); fglass(0.04, 1.0, 0.55, -1.6, 2.73);
+    [[-4.6, 0.98], [-4.6, 3.02], [-1.6, 0.98], [-1.6, 3.02], [-1.6, 1.55], [-1.6, 2.45]].forEach(([x, z]) => bx(0.07, 1.1, 0.07, x, 0.6, z, o.accent).castShadow = false);
+    bx(0.07, 0.1, 0.97, -1.6, 1.12, 2.0, o.accent).castShadow = false;
+    const founderTex = canvasTextureWH(768, 150, (g, w, h) => {
+      const gr = g.createLinearGradient(0, 0, w, 0); gr.addColorStop(0, '#241f4d'); gr.addColorStop(1, o.tower);
+      g.fillStyle = gr; g.fillRect(0, 0, w, h); g.fillStyle = o.accent; g.fillRect(0, h - 12, w, 12);
+      g.fillStyle = '#ffffff'; g.textBaseline = 'middle'; g.font = '800 54px system-ui, "Segoe UI", Arial, sans-serif'; g.fillText("FOUNDER'S OFFICE", 28, 54);
+      g.fillStyle = o.accentLight; g.font = '700 38px system-ui, "Segoe UI", Arial, sans-serif'; g.fillText('Murari Kumar', 30, 108);
+    });
+    const founderSign = new THREE.Mesh(new THREE.PlaneGeometry(1.45, 0.283), new THREE.MeshBasicMaterial({ map: founderTex, side: THREE.DoubleSide, fog: false }));
+    founderSign.position.set(-1.57, 1.3, 2.0); founderSign.rotation.y = Math.PI / 2; H.add(founderSign);
+    bx(0.5, 0.05, 1.5, -4.35, 0.4, 2.0, '#a9714f');                                        // desk against the west wall
+    [[-4.55, 1.3], [-4.55, 2.7], [-4.15, 1.3], [-4.15, 2.7]].forEach(([x, z]) => bx(0.04, 0.36, 0.04, x, 0.2, z, '#8a84b8'));
+    bx(0.04, 0.3, 0.55, -4.45, 0.62, 2.0, '#241f4d'); bx(0.012, 0.24, 0.46, -4.42, 0.63, 2.0, '#9ff3ff', { emissive: o.accent2, emissiveIntensity: 0.7 });
+    bx(0.3, 0.05, 0.3, -4.1, 0.28, 2.75, '#2b2850'); bx(0.05, 0.3, 0.3, -4.0, 0.42, 2.75, '#2b2850');          // spare chair
+    bx(1.1, 0.5, 0.18, -3.0, 0.32, 1.1, '#c9966f');                                                          // bookshelf on the north wall
+    [-3.35, -3.15, -2.95, -2.75, -2.6].forEach((x, k) => bx(0.12, 0.2, 0.1, x, 0.5, 1.1, ['#ff6b5e', '#ffe08a', '#8f7fe6', '#4fae7a', o.accent][k]));
+    ball(H, 0.22, -4.3, 0.35, 0.28 + 0.98, '#3fae7a'); bx(0.3, 0.2, 0.3, -4.3, 0.15, 1.26, '#a9714f');
+    bx(0.5, 0.04, 0.01, -3.2, 0.9, 3.0, '#ffffff').castShadow = false;
+
+
+    const cabinCeiling = bx(3.2, 0.05, 2.2, -3.1, 1.2, 2.0, '#fff8ec'); roof.add(cabinCeiling);
+    const cabinGlow = glow(H, 0xfff3b0, 1.6, 0.35, -3.1, 1.05, 2.0); roof.add(cabinGlow);
     return { H, gate, roof, accent: o.accent, id: o.id, team: [] };
   }
 
@@ -1532,7 +1698,7 @@ export async function createWorld(opts) {
   /* ---------------------------------------------------------------- */
   const walkGround = (x, z) => terrainH(x, z) + 0.03;
   const cityGround = () => 0.06;
-  const hqGround = (x, z) => (Math.abs(x) < 3.6 && z < 0.5 && z > -3.0 ? FLOOR : 0.045);
+  const hqGround = (x, z) => (Math.abs(x) < 3.6 && z < 0.5 && z > -3.0 ? FLOOR : (x > -4.6 && x < -1.6 && z > 0.98 && z < 3.02 ? 0.06 : 0.045));
   const reversed = (list) => list.slice().reverse();
   const goList = (pts) => pts.map((p) => ({ go: p }));
   function DESK_X0(i) { return [-2.6, -1.1, 0.4, 1.9][i]; }
@@ -1766,12 +1932,12 @@ export async function createWorld(opts) {
     const gardener = makePerson({ shirt: '#4fae7a', pants: '#6a5a45', hair: '#241f4d', skin: '#d9a07a', hat: 'straw', shoes: '#8a5a44' });
     cyl(gardener.elbowR, 0.07, 0.07, 0.12, 10, 0.06, -0.2, 0, '#5ac8c8'); cyl(gardener.elbowR, 0.012, 0.02, 0.2, 6, 0.17, -0.16, 0, '#5ac8c8').rotation.z = -1.0;
     makeAgent(gardener, H, {
-      x: -2.6, z: 2.4, face: [-1, 0], ground: hqGround, speed: 0.8,
+      x: 1.6, z: 2.4, face: [-1, 0], ground: hqGround, speed: 0.8,
       steps: [
-        { go: [-2.6, 1.3] }, { wait: 4, pose: 'water', face: [-1, 0] },
-        { go: [-2.6, 2.4] }, { wait: 4, pose: 'water', face: [-1, 0] },
-        { go: [2.6, 2.4] }, { wait: 0.3, face: [1, 0] },
-        { go: [2.6, 1.3] }, { wait: 4, pose: 'water', face: [1, 0] },
+        { go: [1.6, 1.3] }, { wait: 4, pose: 'water', face: [-1, 0] },
+        { go: [1.6, 2.0] }, { wait: 4, pose: 'water', face: [-1, 0] },
+        { go: [3.0, 1.0] }, { wait: 4, pose: 'water', face: [1, 0.3] },
+        { go: [3.2, 2.0] }, { wait: 0.3, face: [1, 0] },
       ],
     });
 
@@ -1800,6 +1966,121 @@ export async function createWorld(opts) {
     courierRun(H3, nexoraHQ, { shirt: '#ff9f43', pants: '#2b2850', hair: '#241f4d', skin: '#e0a98a', hat: 'beanie', hatColor: '#ff9f43', shorts: true, shoes: '#fff8ec' }, '#c9bfff');
     teamSink = null;
   });
+
+  /* ---------------------------------------------------------------- */
+  /* 8.2 the visitor walk-through (starts when you open an office)     */
+  /*   gate + door open -> a visitor walks in -> reception asks the     */
+  /*   name -> the receptionist leads him past every cabin -> to the    */
+  /*   FOUNDER'S OFFICE, where he can chat with Murari (AI).            */
+  /* ---------------------------------------------------------------- */
+  const KK = OFFICE_SCALE / 0.72;                 // camera framing grows with the offices
+  const visit = { active: false, id: null, token: 0, pending: null, cast: null, cam: [], name: '' };
+  const visitCast = {};
+  const CANCEL = { cancelled: true };
+  const delay = (sec) => new Promise((r) => setTimeout(r, sec * 1000));
+  const GUIDE_POST = [0.55, 1.95], VISITOR_START = [0, 6.2], ME_POST = [-3.9, 2.0];
+
+  await stage(0.82, 'Hiring receptionists', () => {
+    const meLook = { shirt: '#ff6b5e', pants: '#2b2850', hair: '#241f4d', backpack: '#e8b23a', skin: '#e9b48d', shoes: '#fff8ec' };
+    const visitorLook = { shirt: '#2e8bff', pants: '#2b2850', hair: '#2b2850', backpack: '#4fae7a', skin: '#d9a07a', shoes: '#ffffff', hairStyle: 'short' };
+    const guideLooks = {
+      astropulse: { shirt: '#ff4fa3', pants: '#2b2850', hair: '#5a3b2a', skin: '#f2c7a5', hairStyle: 'long', shoes: '#fff8ec', longSleeve: true },
+      healthgis: { shirt: '#1fbf8f', pants: '#2b2850', hair: '#241f4d', skin: '#e0a98a', hairStyle: 'pony', shoes: '#fff8ec', longSleeve: true },
+      nexora: { shirt: '#8f7fe6', pants: '#2b2850', hair: '#7a4a32', skin: '#f6d2b4', hairStyle: 'long', shoes: '#fff8ec', longSleeve: true },
+    };
+    Object.keys(offices).forEach((id) => {
+      const off = offices[id], grp = off.H;
+      const guide = makeAgent(makePerson(guideLooks[id]), grp, { x: GUIDE_POST[0], z: GUIDE_POST[1], face: [0, 1], ground: hqGround, speed: 1.05, steps: [{ wait: Infinity, pose: 'talk', face: [0, 1] }] });
+      const me = makeAgent(makePerson(meLook), grp, { x: ME_POST[0], z: ME_POST[1], face: [1, 0], ground: hqGround, speed: 1.0, steps: [{ wait: Infinity, pose: 'talk', face: [1, 0] }] });
+      const visitor = makeAgent(makePerson(visitorLook), grp, { x: VISITOR_START[0], z: VISITOR_START[1], face: [0, -1], ground: hqGround, speed: 1.05, steps: [{ wait: Infinity, pose: 'idle', face: [0, -1] }] });
+      visitor.hidden = true;
+      visitCast[id] = { guide, me, visitor };
+    });
+  });
+
+  function speak(title, text, accent) { onSpeak({ title, text, accent: accent || '#ff6b5e' }); }
+  function goThen(a, pts, o = {}) {              // walk an agent along points; resolves when it arrives
+    return new Promise((resolve) => {
+      const steps = pts.map((p) => ({ go: p }));
+      steps.push({ do: () => resolve() });
+      steps.push({ wait: Infinity, pose: o.pose || 'idle', face: o.face || [0, 1] });
+      a.steps = steps; a.i = 0; a.timer = 0;
+    });
+  }
+  function askName() { return new Promise((res) => { visit.pending = res; onInput({ mode: 'name', placeholder: 'Type your name and press Enter…', who: 'visitor' }); }); }
+  function submitName(text) {
+    const r = visit.pending; if (!r) return false;
+    visit.pending = null; r(String(text || '').trim().slice(0, 40) || 'Guest'); return true;
+  }
+
+  async function runVisit(id) {
+    const off = offices[id], cast = visitCast[id]; if (!off || !cast) return;
+    const cfg = companyCfg(id), team = cfg.team || [], accent = off.accent, my = ++visit.token;
+    const company = ({ astropulse: 'Astropulse SMM', healthgis: 'HealthGIS', nexora: 'Nexora AI' })[id] || 'our office';
+    const chk = () => { if (visit.token !== my) throw CANCEL; };
+    const step = async (p) => { const r = await p; chk(); return r; };
+    const say = (agent, title, text) => { bubbleHead = agent; speak(title, text, accent); };
+    try {
+      visit.active = true; visit.id = id; visit.cast = cast; visit.name = '';
+      onVisitState('walking'); onInput({ mode: 'off' });
+      off.gate.hold = true;                                              // gate and glass door open
+      const { guide, me, visitor } = cast;
+      guide.x = GUIDE_POST[0]; guide.z = GUIDE_POST[1]; drive(guide, [{ wait: Infinity, pose: 'talk', face: [0, 1] }]);
+      visitor.x = VISITOR_START[0]; visitor.z = VISITOR_START[1]; visitor.hidden = false;
+      visit.cam = [visitor];
+      say(guide, 'Reception', 'The gate and the door are open. A visitor is arriving…');
+      await step(goThen(visitor, [[0, 4.6], [0, 3.6], [0.55, 3.0]], { face: [0, -1] }));
+
+      visit.cam = [visitor, guide];
+      say(guide, 'Receptionist · ' + company, 'Good day, and welcome to ' + company + '! May I have your name, please?');
+      const name = await step(askName());
+      visit.name = name; onInput({ mode: 'off' });
+      say(guide, 'Receptionist · ' + company, 'Welcome, ' + name + '! Sir, please come with me. I will show you our cabins and drop you at the founder\'s office.');
+      await step(delay(3.6));
+
+      const stops = [0, 1, 2, 3].map((i) => DESK_X0(i) - 0.75);
+      for (let i = 0; i < stops.length; i++) {
+        const gp = i === 0 ? [[0, 1.7], [0, 0.9], [0, 0.2], [stops[0] + 0.55, 0.1]] : [[stops[i] + 0.55, 0.1]];
+        const vp = i === 0 ? [[0, 2.5], [0, 1.4], [0, 0.55], [stops[0] - 0.25, 0.1]] : [[stops[i] - 0.25, 0.1]];
+        await step(Promise.all([goThen(guide, gp, { pose: 'point', face: [0, -1] }), goThen(visitor, vp, { face: [0, -1] })]));
+        const info = team[i] || {};
+        say(guide, 'Cabin ' + (i + 1) + ' · ' + (info.role || 'Team member'), info.say || '');
+        await step(delay(3.2 + (info.say || '').length * 0.035));
+      }
+
+      say(guide, 'Receptionist · ' + company, 'And now, sir, the founder\'s office. Please follow me.');
+      const gOut = [[stops[3] - 0.2, 0.1], [0.3, 0.12], [0, 0.4], [0, 1.2], [0, 1.9], [-0.6, 2.0], [-1.15, 1.45]];
+      const vOut = [[stops[3] - 0.9, 0.1], [0.3, 0.2], [0, 0.55], [0, 1.4], [0, 2.1], [-0.9, 2.0], [-1.6, 2.0], [-2.75, 2.0]];
+      await step(Promise.all([goThen(guide, gOut, { pose: 'point', face: [-1, 0.2] }), goThen(visitor, vOut, { face: [-1, 0] })]));
+
+      visit.cam = [visitor, me];
+      say(guide, 'Receptionist · ' + company, name + ', this is Murari Kumar\'s office. Please go ahead, he is expecting you.');
+      await step(delay(2.8));
+      goThen(guide, [[-0.6, 2.0], [0, 1.9], GUIDE_POST], { pose: 'talk', face: [0, 1] });
+      say(me, 'Murari Kumar · Founder', 'Welcome, ' + name + '! Please ask me anything: my projects, skills, studies or this company.');
+      onVisitState('chat');
+      onInput({ mode: 'chat', who: 'murari', name, placeholder: 'Ask Murari anything…' });
+    } catch (err) {
+      if (err !== CANCEL) console.warn('Visit stopped:', err);
+    }
+  }
+
+  function cancelVisit() {
+    if (!visit.active) return;
+    visit.token++; visit.active = false; visit.pending = null; visit.cam = [];
+    const cast = visit.cast, id = visit.id;
+    if (cast) {
+      cast.visitor.hidden = true; cast.visitor.x = VISITOR_START[0]; cast.visitor.z = VISITOR_START[1];
+      cast.guide.x = GUIDE_POST[0]; cast.guide.z = GUIDE_POST[1]; drive(cast.guide, [{ wait: Infinity, pose: 'talk', face: [0, 1] }]);
+    }
+    if (id && offices[id]) offices[id].gate.hold = false;
+    onVisitState('ended');
+  }
+  function startVisit(id) { cancelVisit(); runVisit(id).catch(() => {}); }
+  function endVisit() {
+    const id = visit.id; cancelVisit(); onInput({ mode: 'off' }); hideBubble();
+    if (id && mode === 'section') flyTo(id, { noVisit: true });
+  }
 
   /* ---------------------------------------------------------------- */
   /* 8.5 the west district, the lake and the lighthouse                */
@@ -2154,7 +2435,7 @@ export async function createWorld(opts) {
   /*   • Clicking an office lifts its roof (you see the glass cabins). */
   /*   • Double-click / double-tap empty space = go to the next person.*/
   /* ---------------------------------------------------------------- */
-  let sectionId = null, lastTap = null, aboutIdx = 0, aboutTimer = 0, bubbleHead = null;
+  let sectionId = null, lastTap = null, aboutIdx = 0, aboutTimer = 0, bubbleHead = null, aboutPaused = false;
   const tour = { active: false, i: -1, pos: new THREE.Vector3(), tgt: new THREE.Vector3() };
   const vHead = new THREE.Vector3(), vA = new THREE.Vector3(), vB = new THREE.Vector3();
   const FALLBACK_ABOUT = [
@@ -2206,8 +2487,10 @@ export async function createWorld(opts) {
     lines.forEach((ln, i) => g.fillText(ln, 34, 118 + i * (fs + 9)));
     bubbleTex.needsUpdate = true;
   }
-  function showBubble(agent, title, text, accent) { bubbleHead = agent; drawBubble(title, text, accent || '#ff6b5e'); bubble.visible = true; dirty = true; }
-  function hideBubble() { bubbleHead = null; bubble.visible = false; dirty = true; }
+  // The words now appear in a FIXED caption card in the page (never over the people). A small gem above the speaker's head shows who is talking.
+  const speakMark = glow(scene, 0xffe08a, 0.9, 0.95); speakMark.visible = false; speakMark.renderOrder = 40;
+  function showBubble(agent, title, text, accent) { bubbleHead = agent; speak(title, text, accent || '#ff6b5e'); speakMark.visible = true; dirty = true; }
+  function hideBubble() { bubbleHead = null; speakMark.visible = false; onSpeakEnd(); dirty = true; }
   function endTour() { tour.active = false; tour.i = -1; aboutTimer = 0; hideBubble(); }
   function setCutaway(activeId) {
     Object.keys(offices).forEach((k) => { const r = offices[k].roof; if (r) r.visible = k !== activeId; });
@@ -2219,10 +2502,13 @@ export async function createWorld(opts) {
     showBubble(aboutAgent, config.name || 'About me', aboutLines[aboutIdx % aboutLines.length], '#ff6b5e');
     aboutTimer = 0;
   }
-  function startAbout() { aboutIdx = 0; aboutShow(); }
+  function startAbout() {
+    aboutIdx = 0; aboutPaused = false; aboutShow();
+    setTimeout(() => { if (sectionId === 'about') onInput({ mode: 'chat', who: 'about', placeholder: 'Ask me anything about Murari…' }); }, 1400);   // the typing box appears after the greeting
+  }
 
   function advance() {                         // double-click / double-tap / next()
-    if (flight || disposed || mode !== 'section' || !sectionId) return;
+    if (flight || disposed || mode !== 'section' || !sectionId || visit.active) return;
     if (sectionId === 'about') { aboutIdx++; aboutShow(); return; }
     const off = offices[sectionId];
     if (!off || !off.team.length) return;
@@ -2238,8 +2524,21 @@ export async function createWorld(opts) {
   }
 
   function updateTourAndBubble(dt) {
+    if (visit.active && visit.cam.length && mode === 'section' && !flight) {          // follow the visitor (and who he is with)
+      vA.set(0, 0, 0); let n = 0;
+      visit.cam.forEach((ag) => { ag.p.head.getWorldPosition(vHead); vA.add(vHead); n++; });
+      vA.multiplyScalar(1 / Math.max(1, n));
+      let span = 0;
+      if (visit.cam.length > 1) { visit.cam[0].p.head.getWorldPosition(vHead); visit.cam[1].p.head.getWorldPosition(vB); span = vHead.distanceTo(vB); }
+      if (!tour.pos.lengthSq() || !visit.following) { tour.pos.copy(camera.position); tour.tgt.copy(controls.target); visit.following = true; }
+      const k = 1 - Math.exp(-dt * 2.6);
+      const dist = (3.4 + span * 0.95) * KK;
+      tour.pos.lerp(vB.set(vA.x + 0.9 * KK, vA.y + 0.35 * KK, vA.z + dist), k);
+      tour.tgt.lerp(vHead.set(vA.x, vA.y - 0.25, vA.z), k);
+      camera.position.copy(tour.pos); controls.target.copy(tour.tgt); camera.lookAt(tour.tgt); dirty = true;
+    } else visit.following = false;
     if (mode === 'section' && !flight) {
-      if (sectionId === 'about' && bubbleHead && aboutLines.length > 1) {
+      if (sectionId === 'about' && bubbleHead && aboutLines.length > 1 && !aboutPaused) {
         aboutTimer += dt;
         const cur = aboutLines[aboutIdx % aboutLines.length] || '';
         if (aboutTimer > 3.4 + cur.length * 0.05) { aboutIdx++; aboutShow(); }
@@ -2249,19 +2548,16 @@ export async function createWorld(opts) {
         if (ag) {
           ag.p.head.getWorldPosition(vHead);
           const k = 1 - Math.exp(-dt * 3.2);
-          tour.pos.lerp(vA.set(vHead.x + 0.9, vHead.y + 0.15, vHead.z + 2.6), k);
+          tour.pos.lerp(vA.set(vHead.x + 0.9 * KK, vHead.y + 0.15, vHead.z + 2.6 * KK), k);
           tour.tgt.lerp(vB.set(vHead.x, vHead.y - 0.1, vHead.z), k);
           camera.position.copy(tour.pos); controls.target.copy(tour.tgt); camera.lookAt(tour.tgt); dirty = true;
         }
       }
     }
-    if (bubbleHead && bubble.visible) {
+    if (bubbleHead) {
       bubbleHead.p.head.getWorldPosition(vHead);
-      bubble.position.set(vHead.x, vHead.y + 0.2, vHead.z);
-      const hv = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2), asp = camera.aspect;
-      const wf = asp > 1.2 ? 0.34 : Math.min(0.86, 0.34 + (1.2 - asp) * 0.9);
-      const sx = wf * hv * asp;
-      bubble.scale.set(sx, sx * (BH / BW), 1);
+      speakMark.visible = !bubbleHead.hidden;
+      speakMark.position.set(vHead.x, vHead.y + 0.42 + Math.sin(t * 4) * 0.04, vHead.z);
       dirty = true;
     }
   }
@@ -2272,6 +2568,7 @@ export async function createWorld(opts) {
     mode = id === 'home' || id === 'explore' ? id : 'section';
     markers.visible = mode !== 'section';
     setPick(null);
+    cancelVisit(); onInput({ mode: 'off' });
     sectionId = null; endTour();
     setCutaway(offices[id] ? id : null);               // lift the roof of the office that is being visited
     if (flight) { flight.kill(); flight = null; }
@@ -2299,6 +2596,7 @@ export async function createWorld(opts) {
       refreshAuto(); dirty = true;
       sectionId = mode === 'section' ? id : null;
       if (sectionId === 'about') startAbout();         // the person introduces themselves
+      if (mode === 'section' && offices[id] && !o.noVisit) startVisit(id);   // the door opens and a visitor walks in
     };
     flight = new Timeline(done);
     flight.to(k, { p: 1 }, { duration: dur, ease: 'power3.inOut', onUpdate: apply });
@@ -2498,6 +2796,10 @@ export async function createWorld(opts) {
     dispose,
     flyTo: (id) => flyTo(id),
     next: advance,                      // same as a double-click: next person / next sentence
+    submitName,                         // the visitor's name typed at reception
+    endVisit,                           // leave the founder's office
+    startVisit: () => { if (sectionId && offices[sectionId]) startVisit(sectionId); },
+    setAboutPaused: (on) => { aboutPaused = !!on; },
     setViewShift,
     nudge,
     setHover: (id) => { domHoverId = id; dirty = true; },
